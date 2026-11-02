@@ -35,6 +35,7 @@ button{cursor:pointer}
 .btn.blk{width:100%}
 .rw{display:flex;gap:10px;align-items:center}
 .rw>.btn{flex:1}
+.cap::first-letter{text-transform:uppercase}
 .sec{font-size:14px;font-weight:700;color:var(--mut);margin:14px 4px 8px}
 .item{display:flex;align-items:center;gap:8px;min-height:64px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px 12px 6px 4px;margin-bottom:8px}
 .item .tx{flex:1;min-width:0;text-align:left;background:none;border:none;padding:6px 4px}
@@ -328,7 +329,7 @@ return {uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,loos
 (function(){
 'use strict';
 let db=null;
-const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null};
+const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false};
 let installEv=null,persisted=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEv=e;if(S.tab==='mas'&&!S.sheet)render();});
 window.addEventListener('appinstalled',()=>{installEv=null;toast('Instalada.');if(S.tab==='mas')render();});
@@ -439,6 +440,7 @@ function viewHoy(){
 
 function viewProyectos(){
   if(S.pid&&projOf(S.pid))return viewProyecto(S.pid);
+  if(S.calAll)return viewCalGlobal();
   let h=`<header class="hd"><h1>Proyectos</h1><p class="mut">${db.projects.length?'Tocá uno para ver sus tareas.':'Todavía no hay ninguno.'}</p></header>`;
   db.projects.forEach(p=>{
     const pr=Core.projectProgress(db,p.id),sc=Core.schedule(db,p.id);
@@ -446,6 +448,7 @@ function viewProyectos(){
     <div class="bar"><i style="width:${pr.pct}%"></i></div><div class="mut small">${pr.pct} % · ${pr.done} de ${pr.total} hechas${sc.count?' · termina '+esc(fmtDate(sc.finish,sc.fine)):''}</div></button>`;
   });
   h+=`<div class="rw" style="margin-top:6px"><button class="btn pri" style="font-size:16px" data-act="newproj">Nuevo proyecto</button><button class="btn" data-act="goimport">Importar XML</button></div>`;
+  if(db.projects.length)h+=`<button class="btn" style="width:100%;margin-top:8px" data-act="calall">Calendario de todos los proyectos</button>`;
   return h;
 }
 
@@ -476,15 +479,178 @@ function viewProyecto(pid){
   let h=`<div class="hdr"><button class="back" data-act="backproj" aria-label="Volver a proyectos">${svg('back',24,2.2)}</button><h1>${esc(p.name)}</h1></div>
   <div class="mut small" style="padding:0 0 8px">${pr.pct} % · faltan ${esc(fmtDur(pr.remainingMin))}${sc.count?' · termina '+esc(fmtDate(sc.finish,sc.fine)):''}${p.currency&&p.currency!==db.meta.currency?' · '+esc(p.currency):''}</div>
   <div class="bar" style="margin-bottom:12px"><i style="width:${pr.pct}%"></i></div>
-  <div class="chips"><button class="chip on">Lista</button><button class="chip" disabled>Gantt · pronto</button><button class="chip" disabled>PERT · pronto</button><button class="chip" disabled>Calendario · pronto</button></div>
+  <div class="chips">${[['lista','Lista'],['gantt','Gantt'],['pert','PERT'],['cal','Calendario']].map(v=>`<button class="chip ${S.view===v[0]?'on':''}" data-act="view" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>
   <div class="rw" style="margin-bottom:10px"><button class="btn sm" data-act="addtask">+ Tarea</button><button class="btn sm" data-act="addphase">+ Fase</button><button class="btn sm" data-act="share" data-id="${pid}">Compartir</button><button class="btn sm" data-act="projset" data-id="${pid}">Ajustes</button></div>`;
   if(sc.cyclic)h+='<div class="warn" style="margin-bottom:8px">Hay dependencias circulares: revisá las predecesoras.</div>';
   const loose=Core.looseEnds(db,pid);
   if(loose.length)h+=`<div class="warn" style="margin-bottom:10px"><b>¿Falta un enlace?</b> Estas tareas terminan antes del final y nadie las espera: ${loose.map(esc).join(', ')}.</div>`;
+  if(S.view==='gantt')return h+viewGantt(pid,sc);
+  if(S.view==='pert')return h+viewPert(pid,sc);
+  if(S.view==='cal')return h+viewCal(false);
   const rows=treeRows(pid,null,0,sc);
   h+=rows||'<div class="empty"><p class="mut" style="margin:0">Este proyecto no tiene tareas. Agregá la primera con «+ Tarea».</p></div>';
   if(p.resources&&p.resources.length)h+=`<div class="sec">Recursos importados (${p.resources.length})</div><div class="card" style="padding:12px;font-size:14px;gap:4px">${p.resources.map(r=>esc(r.name)).join(' · ')}<div class="mut small">Se podrán asignar a las tareas en la etapa de costos y recursos.</div></div>`;
   return h;
+}
+
+/* ---------- Gantt, PERT, Calendario ---------- */
+const urgFill=ms=>{const n=dayDiff(ms);return n<=0?'#F9D9D5':n<=3?'#FBE0BD':n<=7?'#F7EBB0':'#CDE6E2';};
+function fmtShort(ms,fine){
+  const d=new Date(ms);
+  if(fine)return d.toLocaleDateString('es-AR',{weekday:'short'}).replace('.','')+' '+d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});
+  return d.toLocaleDateString('es-AR',{day:'numeric',month:'short'}).replace('.','');
+}
+const emptyView=t=>`<div class="empty"><p class="mut" style="margin:0">${t}</p></div>`;
+const ZOOM=`<div class="rw" style="margin-bottom:8px"><button class="btn sm" data-act="gzoom" data-d="-" aria-label="Alejar">−</button><button class="btn sm" data-act="gzoom" data-d="0">Ajustar</button><button class="btn sm" data-act="gzoom" data-d="+" aria-label="Acercar">+</button></div>`;
+function viewGantt(pid,sc){
+  const rows=[];
+  (function walk(parent,depth){db.tasks.filter(t=>t.projectId===pid&&(t.parentId||null)===parent).forEach(t=>{
+    if(Core.hasChildren(db,t)){rows.push({g:t,depth});if(!S.collapsed[t.id])walk(t.id,depth+1);}else rows.push({t,depth});});})(null,0);
+  if(!rows.some(r=>r.t))return emptyView('Agregá tareas para ver el Gantt.');
+  const RH=38,HEAD=44,NW=124,BH=18,H=3600000,D=86400000;
+  const start=sc.start,finish=Math.max(sc.finish,start+H),span=finish-start;
+  const k=(Math.max(240,Math.min(window.innerWidth||390,520)-NW-48)/span)*S.gz;
+  const W=Math.ceil(span*k)+24,Ht=HEAD+rows.length*RH+6;
+  const steps=[15*60000,30*60000,H,2*H,3*H,6*H,12*H,D,2*D,7*D,14*D,30*D,90*D];
+  let step=steps[steps.length-1];for(const s of steps){if(s*k>=58){step=s;break;}}
+  const off=new Date(start).getTimezoneOffset()*60000;
+  let g='',top='',bot='',prevM=-1;
+  for(let t=Math.floor((start-off)/step)*step+off;t<=finish;t+=step){
+    if(t<start)continue;
+    const x=(t-start)*k,dt=new Date(t);
+    g+=`<line x1="${x}" y1="${HEAD-6}" x2="${x}" y2="${Ht}" stroke="#EEE9DD"/>`;
+    bot+=`<text x="${x+3}" y="${HEAD-9}" font-size="11" fill="#5B6166">${step<D?dt.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}):dt.getDate()+'/'+(dt.getMonth()+1)}</text>`;
+    if(step>=D&&dt.getMonth()!==prevM){prevM=dt.getMonth();top+=`<text x="${x+3}" y="14" font-size="12" font-weight="700" fill="#1D2327">${esc(dt.toLocaleDateString('es-AR',{month:'long'}))}</text>`;}
+  }
+  if(step<D){const d0=new Date(start);d0.setHours(0,0,0,0);
+    for(let d=new Date(d0);d.getTime()<=finish;d.setDate(d.getDate()+1)){
+      const x=Math.max(0,(d.getTime()-start)*k);
+      top+=`<text x="${x+3}" y="14" font-size="12" font-weight="700" fill="#1D2327">${esc(d.toLocaleDateString('es-AR',{weekday:'short',day:'numeric',month:'short'}))}</text>`;
+      if(d.getTime()>start)g+=`<line x1="${x}" y1="0" x2="${x}" y2="${Ht}" stroke="#CFC9BA"/>`;
+    }}
+  let bg='',bars='',arr='';const idx=new Map();
+  rows.forEach((r,i)=>{
+    const y0=HEAD+i*RH;
+    if(r.g)bg+=`<rect x="0" y="${y0}" width="${W}" height="${RH}" fill="#F1EEE6"/>`;else if(i%2)bg+=`<rect x="0" y="${y0}" width="${W}" height="${RH}" fill="#FAF8F3"/>`;
+    if(r.t)idx.set(r.t.id,i);
+  });
+  rows.forEach((r,i)=>{
+    const t=r.t;if(!t)return;
+    const s=sc.map[t.id];if(!s)return;
+    const y0=HEAD+i*RH,yb=y0+(RH-BH)/2,x=(s.es-start)*k,w=Math.max((s.ef-s.es)*k,6),done=t.status==='done',cy=y0+RH/2;
+    const fill=done?'#DAD6CA':urgFill(t.due||s.es),crit=s.critical&&!done;
+    let shape;
+    if(t.durationMin===0)shape=`<polygon points="${x},${cy} ${x+9},${cy-9} ${x+18},${cy} ${x+9},${cy+9}" fill="${fill}" stroke="${crit?'#1D2327':'#8A8378'}" stroke-width="${crit?2.5:1}"/>`;
+    else shape=`<rect x="${x}" y="${yb}" width="${w}" height="${BH}" rx="5" fill="${fill}" stroke="${crit?'#1D2327':'#8A8378'}" stroke-width="${crit?2.5:1}" ${done?'opacity=".8"':''}/>`+(!done&&t.percent>0?`<rect x="${x+1}" y="${yb+BH-6}" width="${Math.max(0,(w-2)*t.percent/100)}" height="5" rx="2" fill="#0F766E"/>`:'')+(done?`<path d="M${x+w/2-4} ${cy}l3 3 5-6" fill="none" stroke="#1D2327" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`:'');
+    bars+=`<g data-act="edit" data-id="${t.id}" style="cursor:pointer" role="button" aria-label="${esc(t.name)}"><title>${esc(t.name)} · ${esc(fmtDur(t.durationMin))}</title><rect x="${Math.max(0,x-4)}" y="${y0}" width="${w+8}" height="${RH}" fill="transparent"/>${shape}</g>`;
+    (t.preds||[]).forEach(p=>{
+      const pi=idx.get(p.id),a=sc.map[p.id];if(pi==null||!a)return;
+      const ty=p.type||'FS',x1=((ty[0]==='F'?a.ef:a.es)-start)*k,x2=((ty[1]==='S'?s.es:s.ef)-start)*k;
+      const y1=HEAD+pi*RH+RH/2,y2=cy,out=ty[0]==='F'?1:-1,inn=ty[1]==='S'?-1:1,xo=x1+out*7,xi=x2+inn*7;
+      let d;
+      if(out===1&&inn===-1&&xi>=xo)d=`M${x1} ${y1}H${xo}V${y2}H${x2}`;
+      else{const ym=y1+(y2>y1?RH/2:-RH/2);d=`M${x1} ${y1}H${xo}V${ym}H${xi}V${y2}H${x2}`;}
+      const c=a.critical&&s.critical?'#1D2327':'#8A8378',hd=inn===-1?`${x2},${y2} ${x2-6},${y2-3.5} ${x2-6},${y2+3.5}`:`${x2},${y2} ${x2+6},${y2-3.5} ${x2+6},${y2+3.5}`;
+      arr+=`<path d="${d}" fill="none" stroke="${c}" stroke-width="${c==='#1D2327'?1.8:1.3}" ${ty==='FS'?'':'stroke-dasharray="4 3"'} stroke-linejoin="round"/><polygon points="${hd}" fill="${c}"/>`;
+    });
+  });
+  let today='';const now=Date.now();
+  if(now>=start&&now<=finish){const x=(now-start)*k;today=`<line x1="${x}" y1="${HEAD-6}" x2="${x}" y2="${Ht}" stroke="#B42318" stroke-dasharray="4 3"/><text x="${x+3}" y="${Ht-4}" font-size="11" fill="#B42318">hoy</text>`;}
+  const names=rows.map((r,i)=>{
+    const st=`height:${RH}px;width:100%;display:flex;align-items:center;gap:4px;padding:0 6px 0 ${6+r.depth*10}px;border:none;text-align:left;font-size:13px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:${r.g?'#F1EEE6':i%2?'#FAF8F3':'#fff'}`;
+    return r.g?`<button style="${st};font-weight:700" data-act="collapse" data-id="${r.g.id}">${S.collapsed[r.g.id]?'▸':'▾'} ${esc(r.g.name)}</button>`:`<button style="${st}${r.t.status==='done'?';color:#5B6166;text-decoration:line-through':''}" data-act="edit" data-id="${r.t.id}">${esc(r.t.name)}</button>`;
+  }).join('');
+  return ZOOM+`<div style="display:flex;border:1px solid var(--line);border-radius:14px;background:#fff;overflow:hidden"><div style="width:${NW}px;flex:none;border-right:1px solid var(--line)"><div style="height:${HEAD}px"></div>${names}</div><div id="gsc" style="overflow-x:auto;flex:1"><svg width="${W}" height="${Ht}" viewBox="0 0 ${W} ${Ht}" style="display:block;font-family:inherit" role="img" aria-label="Diagrama de Gantt">${bg}${g}${top}${bot}${today}<g style="pointer-events:none">${arr}</g>${bars}</svg></div></div>
+  <div class="mut small" style="margin-top:8px">Tocá una barra para editarla. Borde grueso: ruta crítica. Línea punteada roja: hoy. Color: urgencia (rojo hoy, naranja 1–3 días, amarillo 4–7 días).</div>`;
+}
+function viewPert(pid,sc){
+  const leafs=db.tasks.filter(t=>t.projectId===pid&&!Core.hasChildren(db,t));
+  if(!leafs.length)return emptyView('Agregá tareas para ver el PERT.');
+  const byId=new Map(leafs.map(t=>[t.id,t])),lvl={},vis=new Set();
+  const L=t=>{if(lvl[t.id]!=null)return lvl[t.id];if(vis.has(t.id))return 0;vis.add(t.id);let m=0;(t.preds||[]).forEach(p=>{const x=byId.get(p.id);if(x&&x!==t)m=Math.max(m,L(x)+1);});vis.delete(t.id);return lvl[t.id]=m;};
+  leafs.forEach(L);
+  const maxL=Math.max(...leafs.map(t=>lvl[t.id]));
+  const C=2,CW=156,CH=64,GX=20,GY=30,pos={};let row=0;
+  for(let l=0;l<=maxL;l++){
+    const items=leafs.filter(t=>lvl[t.id]===l);
+    const want=t=>{const cs=(t.preds||[]).map(p=>pos[p.id]).filter(Boolean).map(q=>q.col);return cs.length?Math.round(cs.reduce((a,b)=>a+b,0)/cs.length):0;};
+    items.sort((a,b)=>want(a)-want(b)||(sc.map[b.id]&&sc.map[b.id].critical?1:0)-(sc.map[a.id]&&sc.map[a.id].critical?1:0));
+    if(items.length<=C){const used=new Set();items.forEach(t=>{let c=Math.min(want(t),C-1);if(used.has(c))c=[...Array(C).keys()].find(x=>!used.has(x));used.add(c);pos[t.id]={col:c,row};});row++;}
+    else{items.forEach((t,i)=>{pos[t.id]={col:i%C,row:row+Math.floor(i/C)};});row+=Math.ceil(items.length/C);}
+  }
+  const X=p=>12+p.col*(CW+GX),Y=p=>8+p.row*(CH+GY),Wd=12+C*(CW+GX)-GX+12,Ht=8+row*(CH+GY)-GY+16;
+  let edges='',cards='';
+  leafs.forEach(t=>{
+    (t.preds||[]).forEach(p=>{
+      const a=pos[p.id],b=pos[t.id];if(!a||!b)return;
+      const x1=X(a)+CW/2,y1=Y(a)+CH,x2=X(b)+CW/2,y2=Y(b),ym=y2-GY/2+2;
+      const crit=sc.map[p.id]&&sc.map[t.id]&&sc.map[p.id].critical&&sc.map[t.id].critical,c=crit?'#1D2327':'#8A8378';
+      edges+=`<path d="M${x1} ${y1}V${ym}H${x2}V${y2-6}" fill="none" stroke="${c}" stroke-width="${crit?2.2:1.4}" ${(p.type||'FS')==='FS'?'':'stroke-dasharray="4 3"'} stroke-linejoin="round"/><polygon points="${x2},${y2-1} ${x2-4.5},${y2-8} ${x2+4.5},${y2-8}" fill="${c}"/>`;
+    });
+  });
+  leafs.forEach(t=>{
+    const p=pos[t.id],s=sc.map[t.id],done=t.status==='done',crit=s&&s.critical&&!done;
+    const fill=done?'#fff':urgFill(t.due||(s?s.es:Date.now()));
+    cards+=`<button data-act="edit" data-id="${t.id}" style="position:absolute;left:${X(p)}px;top:${Y(p)}px;width:${CW}px;height:${CH}px;box-sizing:border-box;padding:4px 8px;border-radius:10px;text-align:left;background:${fill};border:${crit?'3px solid #1D2327':done?'1.5px dashed #8A8378':'1px solid #B8B1A0'};color:${done?'#5B6166':'#1D2327'};display:flex;align-items:center;gap:6px;overflow:hidden">${t.starred?`<span style="flex:none">${svg('star',13,0)}</span>`:''}${done?`<span style="flex:none">${svg('chk',13,3)}</span>`:''}<span style="min-width:0"><b style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:16px;overflow-wrap:anywhere">${esc(t.name)}</b><span style="font-size:12px;line-height:16px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(fmtDur(t.durationMin))}${s?' · '+esc(fmtShort(s.es,sc.fine)):''}</span></span></button>`;
+  });
+  return `<div style="overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:#fff"><div style="position:relative;width:${Wd}px;height:${Ht}px"><svg width="${Wd}" height="${Ht}" style="position:absolute;left:0;top:0" aria-hidden="true">${edges}</svg>${cards}</div></div>
+  <div class="mut small" style="margin-top:8px">Las flechas van de lo que hay que terminar a lo que viene después. Borde grueso: ruta crítica. Color: urgencia (rojo hoy, naranja 1–3 días, amarillo 4–7 días). Tocá una caja para editarla.</div>`;
+}
+const PAL=['#0F766E','#B45309','#2563EB','#9333EA','#BE185D','#4D7C0F'];
+function calItems(all){
+  const items=[],pids=all?db.projects.map(p=>p.id):[S.pid];
+  pids.forEach(pid=>{
+    const sc=Core.schedule(db,pid),color=PAL[Math.max(0,db.projects.findIndex(p=>p.id===pid))%PAL.length];
+    db.tasks.filter(t=>t.projectId===pid&&!Core.hasChildren(db,t)).forEach(t=>{
+      const s=sc.map[t.id];if(s)items.push({t,pid,color,es:s.es,ef:s.ef,kind:'work',fine:sc.fine});
+      if(t.due)items.push({t,pid,color,es:t.due,ef:t.due,kind:'due'});
+    });
+  });
+  if(all)db.tasks.filter(t=>!t.projectId&&t.due&&!Core.hasChildren(db,t)).forEach(t=>items.push({t,pid:null,color:'#5B6166',es:t.due,ef:t.due,kind:'due'}));
+  return items;
+}
+const dayStart=(y,m,d)=>new Date(y,m,d,0,0,0,0).getTime();
+function dayItems(items,ds){
+  const de=new Date(ds);de.setDate(de.getDate()+1);const end=de.getTime();
+  return items.filter(i=>i.kind==='due'||i.ef===i.es?(i.es>=ds&&i.es<end):(i.es<end&&i.ef>ds)).sort((a,b)=>a.es-b.es);
+}
+function calRow(i,all){
+  const t=i.t,p=projOf(i.pid),done=t.status==='done';
+  const meta=[];
+  if(i.kind==='due')meta.push('<span class="pill r">vence</span>');
+  else{const a=new Date(i.es),b=new Date(i.ef),hh=d=>d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});if(i.fine)meta.push(`${hh(a)}–${hh(b)}`);else meta.push(esc(fmtDur(t.durationMin)));}
+  if(all&&p)meta.push(esc(p.name));
+  return `<div class="item ${done?'done':''}" style="min-height:56px">${i.kind==='work'?checkBtn(t):`<span style="width:12px"></span>`}<span style="width:8px;height:8px;border-radius:50%;background:${i.color};flex:none" aria-hidden="true"></span><button class="tx" data-act="edit" data-id="${t.id}"><div class="nm">${esc(t.name)}</div><div class="mut small">${meta.join(' · ')}</div></button></div>`;
+}
+function viewCal(all){
+  if(S.calDay==null)S.calDay=startOfToday();
+  const items=calItems(all),sel=new Date(S.calDay),todayMs=startOfToday();
+  const nav=(mode)=>`<div class="rw" style="margin-bottom:8px"><button class="btn sm" data-act="calnav" data-d="-1" aria-label="Anterior">‹</button><button class="btn sm" data-act="calnav" data-d="0">Hoy</button><button class="btn sm" data-act="calnav" data-d="1" aria-label="Siguiente">›</button></div>`;
+  let h=`<div class="chips" style="padding-bottom:4px"><button class="chip ${S.calMode==='mes'?'on':''}" data-act="calmode" data-m="mes">Mes</button><button class="chip ${S.calMode==='semana'?'on':''}" data-act="calmode" data-m="semana">Semana</button>${all?'':`<button class="chip" data-act="calall">Todos los proyectos</button>`}</div>`+nav();
+  if(S.calMode==='mes'){
+    const y=sel.getFullYear(),m=sel.getMonth(),first=new Date(y,m,1),off=(first.getDay()+6)%7;
+    h+=`<div class="big-t cap" style="font-size:20px;line-height:26px;margin:0 4px 8px">${esc(first.toLocaleDateString('es-AR',{month:'long',year:'numeric'}))}</div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center" role="grid">`;
+    ['L','M','M','J','V','S','D'].forEach(d=>{h+=`<div class="mut small" style="font-weight:700">${d}</div>`;});
+    for(let i=0;i<42;i++){
+      const dt=new Date(y,m,1-off+i),ds=dayStart(dt.getFullYear(),dt.getMonth(),dt.getDate()),its=dayItems(items,ds);
+      const cols=[...new Set(its.map(x=>x.color))].slice(0,3),isT=ds===todayMs,isS=ds===S.calDay,inM=dt.getMonth()===m;
+      h+=`<button data-act="calday" data-ms="${ds}" aria-label="${esc(dt.toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long'}))}${its.length?', '+its.length+' tareas':''}" style="min-height:52px;border-radius:10px;border:${isS?'2px solid var(--ink)':'1px solid var(--line)'};background:${inM?'#fff':'transparent'};opacity:${inM?1:.5};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:2px"><span style="font-size:14px;line-height:18px;${isT?'background:var(--teal);color:#fff;border-radius:999px;min-width:24px;':'min-width:24px;'}font-weight:${isT?700:400}">${dt.getDate()}</span><span style="display:flex;gap:3px;height:8px">${cols.map(c=>`<i style="width:7px;height:7px;border-radius:50%;background:${c}"></i>`).join('')}${its.length>3?`<b style="font-size:10px;line-height:8px">+</b>`:''}</span></button>`;
+    }
+    h+='</div>';
+    const its=dayItems(items,S.calDay);
+    h+=`<div class="sec cap">${esc(sel.toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long'}))}</div>`+(its.length?its.map(i=>calRow(i,all)).join(''):emptyView('Nada este día.'));
+  }else{
+    const off=(sel.getDay()+6)%7,mon=new Date(sel.getFullYear(),sel.getMonth(),sel.getDate()-off);
+    h+=`<div class="big-t" style="font-size:18px;line-height:24px;margin:0 4px 6px">Semana del ${esc(mon.toLocaleDateString('es-AR',{day:'numeric',month:'long'}))}</div>`;
+    for(let i=0;i<7;i++){
+      const dt=new Date(mon.getFullYear(),mon.getMonth(),mon.getDate()+i),ds=dayStart(dt.getFullYear(),dt.getMonth(),dt.getDate()),its=dayItems(items,ds);
+      h+=`<div class="sec cap" style="${ds===todayMs?'color:var(--teal)':''}">${esc(dt.toLocaleDateString('es-AR',{weekday:'long',day:'numeric'}))}${ds===todayMs?' · hoy':''}</div>`+(its.length?its.map(x=>calRow(x,all)).join(''):'<div class="mut small" style="margin:0 4px 6px">Libre</div>');
+    }
+  }
+  return h;
+}
+function viewCalGlobal(){
+  return `<div class="hdr"><button class="back" data-act="calback" aria-label="Volver a proyectos">${svg('back',24,2.2)}</button><h1>Calendario</h1></div><div class="mut small" style="padding:0 0 8px">Tareas de todos los proyectos. Las de la Bandeja aparecen si tienen fecha límite.</div>`+viewCal(true);
 }
 
 function viewBandeja(){
@@ -525,11 +691,14 @@ function viewMas(){
   <button class="btn blk" data-act="savesettings">Guardar</button></div>
   <input type="file" id="f-xml" accept=".xml,text/xml,application/xml" hidden><input type="file" id="f-json" accept=".json,application/json" hidden>`;
 }
+let gscL=0;
 function render(){
+  const g0=$('#gsc');if(g0)gscL=g0.scrollLeft;
   let body='';
   if(S.tab==='hoy')body=viewHoy();else if(S.tab==='proyectos')body=viewProyectos();else if(S.tab==='bandeja')body=viewBandeja();else if(S.tab==='decidir')body=viewDecidir();else body=viewMas();
   const nav=[['hoy','Hoy','hoy'],['proyectos','Proyectos','proy'],['bandeja','Bandeja','band'],['decidir','Decidir','dec'],['mas','Más','mas']];
   $('#app').innerHTML=`<main class="scr">${body}</main><button class="fab" data-act="capture" aria-label="Anotar algo rápido">${svg('plus',26,2.2)}</button><nav class="nav" aria-label="Navegación principal"><div>${nav.map(n=>`<button data-act="tab" data-tab="${n[0]}" ${S.tab===n[0]?'aria-current="page" class="on"':''}>${svg(n[2])}<span>${n[1]}</span></button>`).join('')}</div></nav>`;
+  const gs=$('#gsc');if(gs){gs.scrollLeft=gscL;}
   drawLayer();
 }
 
@@ -694,7 +863,7 @@ function parseSteps(text){
 
 function act(a,d,el){
   switch(a){
-    case 'tab':S.tab=d.tab;S.pid=null;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
+    case 'tab':S.tab=d.tab;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
     case 'toggle':{const t=taskOf(d.id);if(!t)break;if(t.status==='done'){Core.reopen(db,d.id);save();render();}else{finishTask(d.id);}break;}
     case 'other':S.offset++;render();break;
     case 'start':startTimer(d.id);break;
@@ -712,8 +881,19 @@ function act(a,d,el){
       const start=parseDT(L.querySelector('#np-date').value,L.querySelector('#np-time').value)||Core.defaultStart();
       const p=Core.makeProject(db,key,name,start,Date.now());S.pid=p.id;S.sheet=null;S.tab='proyectos';save();render();break;
     }
-    case 'openproj':S.pid=d.id;render();window.scrollTo(0,0);break;
-    case 'backproj':S.pid=null;render();break;
+    case 'openproj':S.pid=d.id;S.view='lista';S.calDay=null;render();window.scrollTo(0,0);break;
+    case 'backproj':S.pid=null;S.view='lista';render();break;
+    case 'view':S.view=d.v;render();break;
+    case 'gzoom':S.gz=d.d==='0'?1:Math.max(0.4,Math.min(8,d.d==='+'?S.gz*1.5:S.gz/1.5));render();break;
+    case 'calall':S.calAll=true;S.tab='proyectos';S.pid=null;render();window.scrollTo(0,0);break;
+    case 'calback':S.calAll=false;render();break;
+    case 'calmode':S.calMode=d.m;render();break;
+    case 'calday':S.calDay=+d.ms;render();break;
+    case 'calnav':{const n=+d.d,c=new Date(S.calDay==null?startOfToday():S.calDay);
+      if(n===0){S.calDay=startOfToday();}
+      else if(S.calMode==='mes'){S.calDay=new Date(c.getFullYear(),c.getMonth()+n,1).getTime();}
+      else{S.calDay=new Date(c.getFullYear(),c.getMonth(),c.getDate()+7*n).getTime();}
+      render();break;}
     case 'collapse':S.collapsed[d.id]=!S.collapsed[d.id];render();break;
     case 'addtask':S.sheet={type:'task',draft:{id:Core.uid(),projectId:S.pid,parentId:null,name:'',durationMin:60,status:'todo',percent:0,preds:[],starred:false,resp:'',notes:'',due:null,createdAt:Date.now()}};drawLayer();break;
     case 'addphase':S.sheet={type:'phase'};drawLayer();break;
