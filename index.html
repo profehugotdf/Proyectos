@@ -322,13 +322,23 @@ function buildImport(db,parsed,opt){
   return {pid,count:made.length,links:parsed.links,loose:pid?looseEnds(db,pid):[]};
 }
 /* ---------- recursos y costos ---------- */
-const UNITS={u:['u',1,'unidades'],g:['m',1,'g'],kg:['m',1000,'kg'],ml:['v',1,'ml'],l:['v',1000,'l']};
-const convert=(q,from,to)=>{const a=UNITS[from],b=UNITS[to];if(!a||!b||a[0]!==b[0])return null;return q*a[1]/b[1];};
+const UNITS={u:['u',1,'unidades'],g:['m',1,'g'],kg:['m',1000,'kg'],ml:['v',1,'ml'],l:['v',1000,'l'],mm:['L',0.001,'mm'],cm:['L',0.01,'cm'],m:['L',1,'m'],km:['L',1000,'km'],m2:['A',1,'m²'],m3:['C',1,'m³']};
+const STD_EXTRA=['bolsa','caja','rollo','plancha','lata','balde','pack','pieza','tira','par'];
+const ulab=u=>UNITS[u]?UNITS[u][2]:(u||'u');
+const ufam=u=>UNITS[u]?UNITS[u][0]:'x:'+String(u||'u').toLowerCase();
+const convert=(q,from,to)=>{if(from===to)return q;const a=UNITS[from]?UNITS[from]:[ufam(from),1],b=UNITS[to]?UNITS[to]:[ufam(to),1];if(a[0]!==b[0])return null;return q*a[1]/b[1];};
+const unitsLike=u=>{const f=ufam(u);const L=Object.keys(UNITS).filter(k=>UNITS[k][0]===f);return L.length?L:[u];};
+/* 1 unidad del recurso = eq.q de eq.u (ej.: 1 bolsa = 25 kg) */
+function toResUnit(r,q,from){
+  const to=r.unit||'u';let x=convert(q,from||to,to);if(x!=null)return x;
+  if(r.eq&&+r.eq.q>0){const y=convert(q,from,r.eq.u);if(y!=null)return y/(+r.eq.q);}
+  return null;
+}
 function newResource(name,kind){return {id:uid(),name,kind:kind||'persona',unit:kind==='material'?'u':'',stock:0,price:0,rate:0,me:false};}
 function resKind(r){return r.kind||'persona';}
 function assignQty(db,pid,a,t){
   const p=db.projects.find(x=>x.id===pid),r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return null;
-  if(resKind(r)==='material'){const q=convert(a.qty||0,a.unit||r.unit,r.unit||'u');return q==null?0:q;}
+  if(resKind(r)==='material'){const q=toResUnit(r,a.qty||0,a.unit||r.unit);return q==null?0:q;}
   return a.qty!=null&&a.qty!==''?a.qty:(t.durationMin||0)/60;
 }
 function taskCost(db,t){
@@ -377,7 +387,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {UNITS,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -713,7 +723,7 @@ function viewCalGlobal(){
 
 /* ---------- Recursos y costos (vistas) ---------- */
 const KINDS={persona:'Persona',equipo:'Equipo o herramienta',material:'Material'};
-const fmtQ=(q,u)=>{const x=Math.round(q*100)/100;return String(x).replace('.',',')+' '+(u==='u'||!u?'u':u);};
+const fmtQ=(q,u)=>{const x=Math.round(q*100)/100;return String(x).replace('.',',')+' '+(u==='u'||!u?'u':Core.ulab(u));};
 function bestUnit(q,u){if(u==='g'&&Math.abs(q)>=1000)return fmtQ(q/1000,'kg');if(u==='ml'&&Math.abs(q)>=1000)return fmtQ(q/1000,'l');return fmtQ(q,u);}
 function viewRecursos(pid){
   const p=projOf(pid),res=p.resources||[],cur=p.currency;
@@ -727,7 +737,7 @@ function viewRecursos(pid){
     h+=`<div class="sec">${k==='persona'?'Personas':k==='equipo'?'Equipos y herramientas':'Materiales'}</div>`;
     L.forEach(r=>{
       let meta='';
-      if(k==='material'){const i=stById.get(r.id);meta=`Stock ${esc(bestUnit(i.stock,r.unit))} · queda ${esc(bestUnit(i.real,r.unit))}${i.planned>i.used?` · reservado ${esc(bestUnit(i.planned-i.used,r.unit))}`:''}${r.price?` · ${esc(Core.money(r.price,cur))}/${esc(r.unit)}`:''}`;
+      if(k==='material'){const i=stById.get(r.id);meta=`Stock ${esc(bestUnit(i.stock,r.unit))} · queda ${esc(bestUnit(i.real,r.unit))}${i.planned>i.used?` · reservado ${esc(bestUnit(i.planned-i.used,r.unit))}`:''}${r.price?` · ${esc(Core.money(r.price,cur))}/${esc(Core.ulab(r.unit))}`:''}`;
         if(i.missing>0)meta+=`<div class="pill o" style="margin-top:4px">Faltan ${esc(bestUnit(i.missing,r.unit))}</div>`;}
       else meta=(r.rate?esc(Core.money(r.rate,cur))+'/hora':'sin costo')+(r.me?' · sos vos':'');
       const n=db.tasks.filter(t=>t.projectId===pid&&(t.assign||[]).some(a=>a.rid===r.id)).length;
@@ -753,8 +763,11 @@ function sheetRes(s){
   const isNew=!s.id,r=isNew?s.draft:(projOf(s.pid).resources||[]).find(x=>x.id===s.id),k=Core.resKind(r),mat=k==='material';
   return `<h2>${isNew?'Nuevo recurso':'Recurso'}</h2><label class="fld">Nombre<input id="rs-name" data-focus value="${esc(r.name)}" placeholder="Ej.: Azúcar, Martillo, Hugo"></label>
   <label class="fld">Tipo<select id="rs-kind">${Object.entries(KINDS).map(([v,l])=>`<option value="${v}" ${k===v?'selected':''}>${l}</option>`).join('')}</select></label>
-  ${mat?`<div class="two"><label class="fld">Unidad<select id="rs-unit">${['u','g','kg','ml','l'].map(u=>`<option value="${u}" ${r.unit===u?'selected':''}>${u==='u'?'unidades':u}</option>`).join('')}</select></label><label class="fld">Stock inicial<input id="rs-stock" type="number" step="any" min="0" value="${r.stock||''}" placeholder="0"></label></div>
-  <label class="fld">Precio por unidad (opcional)<input id="rs-price" type="number" step="any" min="0" value="${r.price||''}" placeholder="por ${esc(r.unit||'u')}"></label>
+  ${mat?`${(()=>{const std=Object.keys(Core.UNITS).concat(Core.STD_EXTRA),cu=r.unit&&!std.includes(r.unit)?r.unit:'';return `<div class="two"><label class="fld">Unidad<select id="rs-unit">${std.map(u=>`<option value="${u}" ${r.unit===u?'selected':''}>${u==='u'?'unidades':esc(Core.ulab(u))}</option>`).join('')}</select></label><label class="fld">Stock inicial<input id="rs-stock" type="number" step="any" min="0" value="${r.stock||''}" placeholder="0"></label></div>
+  <label class="fld">¿Otra unidad? (si no está en la lista)<input id="rs-unitc" value="${esc(cu)}" placeholder="Ej.: m² de membrana, viaje, tacho"></label>`;})()}
+  <label class="fld">Precio por unidad (opcional)<input id="rs-price" type="number" step="any" min="0" value="${r.price||''}" placeholder="por ${esc(Core.ulab(r.unit||'u'))}"></label>
+  <div class="fld">Equivalencia (opcional)</div><div class="rw" style="align-items:center"><span>1 ${esc(Core.ulab(r.unit||'u'))} =</span><input id="rs-eqq" type="number" step="any" min="0" aria-label="Cantidad equivalente" style="flex:1;min-height:48px;border:1px solid var(--line2);border-radius:12px;padding:0 10px;font-size:16px;background:#fff" value="${r.eq?r.eq.q:''}" placeholder="25"><select id="rs-equ" aria-label="Unidad equivalente">${['','g','kg','ml','l','mm','cm','m','m2','m3','u'].map(u=>`<option value="${u}" ${(r.eq&&r.eq.u===u)?'selected':''}>${u===''?'—':esc(Core.ulab(u))}</option>`).join('')}</select></div>
+  <div class="why" style="font-size:13px">Sirve para pasar entre medidas distintas. Ej.: 1 bolsa de cemento = 50 kg; así una tarea puede pedir 10 kg y se descuenta de las bolsas.</div>
   <div class="why" style="font-size:13px">Cada tarea que use este material descuenta del stock. Ej.: 1 kg de azúcar y una tarea con 200 g: quedan 800 g.</div>`
   :`<label class="fld">Costo por hora (opcional)<input id="rs-rate" type="number" step="any" min="0" value="${r.rate||''}" placeholder="0"></label>
   ${k==='persona'?`<label class="pred"><label><input id="rs-me" type="checkbox" ${r.me?'checked':''}> <span>Soy yo (para sumar mis horas entre proyectos)</span></label></label>`:''}`}
@@ -769,8 +782,8 @@ function taskResBlock(t){
   h+=res.map(r=>{
     const a=(t.assign||[]).find(x=>x.rid===r.id),k=Core.resKind(r);
     let ctl;
-    if(k==='material'){const fam=['g','kg'].includes(r.unit)?['g','kg']:['ml','l'].includes(r.unit)?['ml','l']:['u'];const cu=a&&a.unit||(r.unit==='kg'?'g':r.unit==='l'?'ml':r.unit);
-      ctl=`<input class="rq" type="number" step="any" min="0" aria-label="Cantidad" placeholder="cantidad" value="${a&&a.qty!=null?a.qty:''}"><select class="ru" aria-label="Unidad">${fam.map(u=>`<option value="${u}" ${cu===u?'selected':''}>${u==='u'?'unid.':u}</option>`).join('')}</select>`;}
+    if(k==='material'){const fam=[...new Set(Core.unitsLike(r.unit).concat(r.eq?Core.unitsLike(r.eq.u):[]))];if(!fam.includes(r.unit))fam.unshift(r.unit);const cu=a&&a.unit||(r.unit==='kg'?'g':r.unit==='l'?'ml':r.unit);
+      ctl=`<input class="rq" type="number" step="any" min="0" aria-label="Cantidad" placeholder="cantidad" value="${a&&a.qty!=null?a.qty:''}"><select class="ru" aria-label="Unidad">${fam.map(u=>`<option value="${esc(u)}" ${cu===u?'selected':''}>${u==='u'?'unid.':esc(Core.ulab(u))}</option>`).join('')}</select>`;}
     else ctl=`<input class="rq" type="number" step="any" min="0" aria-label="Horas" placeholder="horas (toda la tarea)" value="${a&&a.qty!=null?a.qty:''}">`;
     return `<div class="pred" data-res="${r.id}"><label><input type="checkbox" ${a?'checked':''}> <span>${esc(r.name)}</span></label><div class="predx">${ctl}</div></div>`;
   }).join('');
@@ -1031,7 +1044,7 @@ function act(a,d,el){
       const name=L.querySelector('#rs-name').value.trim();if(!name){toast('Poné un nombre.');break;}
       const num=id=>{const e=L.querySelector(id);return e?(parseFloat(e.value)||0):0;};
       r.name=name;r.kind=L.querySelector('#rs-kind').value;
-      if(r.kind==='material'){r.unit=L.querySelector('#rs-unit').value;r.stock=num('#rs-stock');r.price=num('#rs-price');r.rate=0;r.me=false;}
+      if(r.kind==='material'){const uc=L.querySelector('#rs-unitc').value.trim();r.unit=uc||L.querySelector('#rs-unit').value;r.stock=num('#rs-stock');r.price=num('#rs-price');r.rate=0;r.me=false;const eq=num('#rs-eqq'),eu=L.querySelector('#rs-equ').value;r.eq=eq>0&&eu&&eu!==r.unit?{q:eq,u:eu}:null;}
       else{r.rate=num('#rs-rate');const me=L.querySelector('#rs-me');r.me=!!(me&&me.checked);r.unit='';r.stock=0;r.price=0;}
       if(isNew){p.resources=p.resources||[];p.resources.push(r);}
       S.sheet=null;save();render();break;}
