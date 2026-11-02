@@ -321,7 +321,63 @@ function buildImport(db,parsed,opt){
   });
   return {pid,count:made.length,links:parsed.links,loose:pid?looseEnds(db,pid):[]};
 }
-return {uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+/* ---------- recursos y costos ---------- */
+const UNITS={u:['u',1,'unidades'],g:['m',1,'g'],kg:['m',1000,'kg'],ml:['v',1,'ml'],l:['v',1000,'l']};
+const convert=(q,from,to)=>{const a=UNITS[from],b=UNITS[to];if(!a||!b||a[0]!==b[0])return null;return q*a[1]/b[1];};
+function newResource(name,kind){return {id:uid(),name,kind:kind||'persona',unit:kind==='material'?'u':'',stock:0,price:0,rate:0,me:false};}
+function resKind(r){return r.kind||'persona';}
+function assignQty(db,pid,a,t){
+  const p=db.projects.find(x=>x.id===pid),r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return null;
+  if(resKind(r)==='material'){const q=convert(a.qty||0,a.unit||r.unit,r.unit||'u');return q==null?0:q;}
+  return a.qty!=null&&a.qty!==''?a.qty:(t.durationMin||0)/60;
+}
+function taskCost(db,t){
+  const p=db.projects.find(x=>x.id===t.projectId);let plan=+t.cost||0;const parts=[];
+  if(plan)parts.push({n:'Costo propio',v:plan});
+  (t.assign||[]).forEach(a=>{
+    const r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return;
+    const q=assignQty(db,t.projectId,a,t);if(q==null)return;
+    const v=resKind(r)==='material'?q*(+r.price||0):q*(+r.rate||0);
+    if(v){plan+=v;parts.push({n:r.name,v});}
+  });
+  const real=t.realCost!=null&&t.realCost!==''?+t.realCost:plan;
+  return {plan,real,parts};
+}
+function projectCosts(db,pid){
+  let plan=0,spent=0,planDone=0;const byTask=[];
+  db.tasks.filter(t=>t.projectId===pid&&!hasChildren(db,t)).forEach(t=>{
+    const c=taskCost(db,t);plan+=c.plan;if(t.status==='done'){spent+=c.real;planDone+=c.plan;}
+    if(c.plan||c.real)byTask.push({t,plan:c.plan,real:c.real,parts:c.parts});
+  });
+  const p=db.projects.find(x=>x.id===pid),fx=(p&&+p.fx)||1;
+  return {plan,spent,pending:plan-planDone,byTask,fx,planBase:plan*fx,spentBase:spent*fx};
+}
+function stockInfo(db,pid){
+  const p=db.projects.find(x=>x.id===pid);if(!p)return[];
+  return (p.resources||[]).filter(r=>resKind(r)==='material').map(r=>{
+    let planned=0,used=0;
+    db.tasks.filter(t=>t.projectId===pid&&!hasChildren(db,t)).forEach(t=>(t.assign||[]).forEach(a=>{
+      if(a.rid!==r.id)return;const q=assignQty(db,pid,a,t)||0;planned+=q;if(t.status==='done')used+=q;}));
+    const stock=+r.stock||0;
+    return {r,stock,planned,used,real:stock-used,projected:stock-planned,missing:Math.max(0,planned-stock)};
+  });
+}
+function overlaps(db,pid){
+  const sc=schedule(db,pid),p=db.projects.find(x=>x.id===pid),out=[];if(!p)return out;
+  (p.resources||[]).filter(r=>resKind(r)!=='material').forEach(r=>{
+    const its=db.tasks.filter(t=>t.projectId===pid&&t.status!=='done'&&(t.assign||[]).some(a=>a.rid===r.id)&&sc.map[t.id]).map(t=>({t,s:sc.map[t.id]})).filter(x=>x.s.ef>x.s.es).sort((a,b)=>a.s.es-b.s.es);
+    for(let i=0;i<its.length;i++)for(let j=i+1;j<its.length;j++){if(its[j].s.es>=its[i].s.ef)break;out.push({r,a:its[i].t,b:its[j].t});}
+  });
+  return out;
+}
+function removeResource(db,pid,rid){
+  const p=db.projects.find(x=>x.id===pid);if(!p)return;
+  p.resources=(p.resources||[]).filter(r=>r.id!==rid);
+  db.tasks.forEach(t=>{if(t.projectId===pid&&t.assign)t.assign=t.assign.filter(a=>a.rid!==rid);});
+}
+const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
+
+return {UNITS,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -463,6 +519,7 @@ function treeRows(pid,parentId,depth,sc){
       const s=sc.map[t.id];
       let meta=esc(fmtDur(t.durationMin));
       if(s)meta+=' · '+esc(fmtDate(s.es,sc.fine));
+      {const tc=Core.taskCost(db,t);if(tc.plan)meta+=' · '+esc(Core.money(tc.plan,(projOf(pid)||{}).currency));}
       const badges=[];
       if(s&&s.critical&&t.status!=='done')badges.push('<span class="pill k">crítica</span>');
       if(t.starred)badges.push(`<span class="pill k" style="padding:1px 6px">${svg('star',11,0)}</span>`);
@@ -479,7 +536,7 @@ function viewProyecto(pid){
   let h=`<div class="hdr"><button class="back" data-act="backproj" aria-label="Volver a proyectos">${svg('back',24,2.2)}</button><h1>${esc(p.name)}</h1></div>
   <div class="mut small" style="padding:0 0 8px">${pr.pct} % · faltan ${esc(fmtDur(pr.remainingMin))}${sc.count?' · termina '+esc(fmtDate(sc.finish,sc.fine)):''}${p.currency&&p.currency!==db.meta.currency?' · '+esc(p.currency):''}</div>
   <div class="bar" style="margin-bottom:12px"><i style="width:${pr.pct}%"></i></div>
-  <div class="chips">${[['lista','Lista'],['gantt','Gantt'],['pert','PERT'],['cal','Calendario']].map(v=>`<button class="chip ${S.view===v[0]?'on':''}" data-act="view" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>
+  <div class="chips">${[['lista','Lista'],['gantt','Gantt'],['pert','PERT'],['cal','Calendario'],['rec','Recursos'],['cost','Costos']].map(v=>`<button class="chip ${S.view===v[0]?'on':''}" data-act="view" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>
   <div class="rw" style="margin-bottom:10px"><button class="btn sm" data-act="addtask">+ Tarea</button><button class="btn sm" data-act="addphase">+ Fase</button><button class="btn sm" data-act="share" data-id="${pid}">Compartir</button><button class="btn sm" data-act="projset" data-id="${pid}">Ajustes</button></div>`;
   if(sc.cyclic)h+='<div class="warn" style="margin-bottom:8px">Hay dependencias circulares: revisá las predecesoras.</div>';
   const loose=Core.looseEnds(db,pid);
@@ -487,9 +544,10 @@ function viewProyecto(pid){
   if(S.view==='gantt')return h+viewGantt(pid,sc);
   if(S.view==='pert')return h+viewPert(pid,sc);
   if(S.view==='cal')return h+viewCal(false);
+  if(S.view==='rec')return h+viewRecursos(pid);
+  if(S.view==='cost')return h+viewCostos(pid);
   const rows=treeRows(pid,null,0,sc);
   h+=rows||'<div class="empty"><p class="mut" style="margin:0">Este proyecto no tiene tareas. Agregá la primera con «+ Tarea».</p></div>';
-  if(p.resources&&p.resources.length)h+=`<div class="sec">Recursos importados (${p.resources.length})</div><div class="card" style="padding:12px;font-size:14px;gap:4px">${p.resources.map(r=>esc(r.name)).join(' · ')}<div class="mut small">Se podrán asignar a las tareas en la etapa de costos y recursos.</div></div>`;
   return h;
 }
 
@@ -653,6 +711,72 @@ function viewCalGlobal(){
   return `<div class="hdr"><button class="back" data-act="calback" aria-label="Volver a proyectos">${svg('back',24,2.2)}</button><h1>Calendario</h1></div><div class="mut small" style="padding:0 0 8px">Tareas de todos los proyectos. Las de la Bandeja aparecen si tienen fecha límite.</div>`+viewCal(true);
 }
 
+/* ---------- Recursos y costos (vistas) ---------- */
+const KINDS={persona:'Persona',equipo:'Equipo o herramienta',material:'Material'};
+const fmtQ=(q,u)=>{const x=Math.round(q*100)/100;return String(x).replace('.',',')+' '+(u==='u'||!u?'u':u);};
+function bestUnit(q,u){if(u==='g'&&Math.abs(q)>=1000)return fmtQ(q/1000,'kg');if(u==='ml'&&Math.abs(q)>=1000)return fmtQ(q/1000,'l');return fmtQ(q,u);}
+function viewRecursos(pid){
+  const p=projOf(pid),res=p.resources||[],cur=p.currency;
+  let h=`<div class="rw" style="margin-bottom:10px"><button class="btn pri" style="font-size:16px" data-act="addres" data-pid="${pid}">+ Recurso</button></div>`;
+  if(!res.length)return h+emptyView('Acá cargás quién hace el trabajo (personas, herramientas) y qué se consume (materiales con su stock). Después los asignás a cada tarea.');
+  const ov=Core.overlaps(db,pid);
+  if(ov.length){const seen=new Set();h+=`<div class="warn" style="margin-bottom:10px"><b>Superposición:</b> ${ov.filter(o=>{const k=o.r.id+o.a.id+o.b.id;if(seen.has(k))return false;seen.add(k);return true;}).slice(0,4).map(o=>`${esc(o.r.name)} está en «${esc(o.a.name)}» y «${esc(o.b.name)}» a la vez`).join('; ')}.</div>`;}
+  const st=Core.stockInfo(db,pid),stById=new Map(st.map(x=>[x.r.id,x]));
+  ['persona','equipo','material'].forEach(k=>{
+    const L=res.filter(r=>Core.resKind(r)===k);if(!L.length)return;
+    h+=`<div class="sec">${k==='persona'?'Personas':k==='equipo'?'Equipos y herramientas':'Materiales'}</div>`;
+    L.forEach(r=>{
+      let meta='';
+      if(k==='material'){const i=stById.get(r.id);meta=`Stock ${esc(bestUnit(i.stock,r.unit))} · queda ${esc(bestUnit(i.real,r.unit))}${i.planned>i.used?` · reservado ${esc(bestUnit(i.planned-i.used,r.unit))}`:''}${r.price?` · ${esc(Core.money(r.price,cur))}/${esc(r.unit)}`:''}`;
+        if(i.missing>0)meta+=`<div class="pill o" style="margin-top:4px">Faltan ${esc(bestUnit(i.missing,r.unit))}</div>`;}
+      else meta=(r.rate?esc(Core.money(r.rate,cur))+'/hora':'sin costo')+(r.me?' · sos vos':'');
+      const n=db.tasks.filter(t=>t.projectId===pid&&(t.assign||[]).some(a=>a.rid===r.id)).length;
+      h+=`<button class="card" style="text-align:left;width:100%;gap:2px;margin-bottom:8px;cursor:pointer" data-act="editres" data-pid="${pid}" data-id="${r.id}"><div class="big-t" style="font-size:17px;line-height:22px">${esc(r.name)}</div><div class="mut small">${meta}</div><div class="mut small">${n?`En ${n} tarea${n===1?'':'s'}`:'Sin asignar todavía'}</div></button>`;
+    });
+  });
+  return h;
+}
+function viewCostos(pid){
+  const p=projOf(pid),c=Core.projectCosts(db,pid),cur=p.currency,base=db.meta.currency,m=v=>esc(Core.money(v,cur));
+  if(!c.plan)return emptyView('Todavía no hay costos. Cargá el costo por hora de tus recursos, el precio de los materiales o un costo propio en cada tarea.');
+  const pct=c.plan?Math.min(100,Math.round(c.spent/c.plan*100)):0;
+  let h=`<div class="card" style="gap:10px"><div class="lab">Presupuesto estimado</div><div class="big-t">${m(c.plan)}</div><div class="bar"><i style="width:${pct}%"></i></div><div class="mut small">Gastado ${m(c.spent)} · falta ${m(c.pending)}</div>${cur!==base?`<div class="mut small">En ${esc(base)} (cambio ${esc(String(c.fx))}${p.fxDate?' al '+esc(fmtDate(p.fxDate)):''}): ${esc(Core.money(c.planBase,base))}</div>`:''}</div>`;
+  const st=Core.stockInfo(db,pid).filter(x=>x.missing>0);
+  if(st.length)h+=`<div class="warn" style="margin-bottom:10px"><b>Para comprar:</b> ${st.map(x=>`${esc(x.r.name)} (${esc(bestUnit(x.missing,x.r.unit))})${x.r.price?' ≈ '+esc(Core.money(x.missing*x.r.price,cur)):''}`).join(', ')}.</div>`;
+  h+=`<div class="sec">Por tarea</div>`;
+  c.byTask.sort((a,b)=>b.plan-a.plan).forEach(x=>{
+    h+=`<button class="item" style="width:100%;text-align:left;cursor:pointer;padding-left:12px" data-act="edit" data-id="${x.t.id}"><span class="tx" style="flex:1"><div class="nm">${esc(x.t.name)}</div><div class="mut small">${x.parts.map(q=>esc(q.n)+' '+esc(Core.money(q.v,cur))).join(' · ')}</div></span><b style="font-size:15px">${m(x.t.status==='done'?x.real:x.plan)}</b></button>`;
+  });
+  return h;
+}
+function sheetRes(s){
+  const isNew=!s.id,r=isNew?s.draft:(projOf(s.pid).resources||[]).find(x=>x.id===s.id),k=Core.resKind(r),mat=k==='material';
+  return `<h2>${isNew?'Nuevo recurso':'Recurso'}</h2><label class="fld">Nombre<input id="rs-name" data-focus value="${esc(r.name)}" placeholder="Ej.: Azúcar, Martillo, Hugo"></label>
+  <label class="fld">Tipo<select id="rs-kind">${Object.entries(KINDS).map(([v,l])=>`<option value="${v}" ${k===v?'selected':''}>${l}</option>`).join('')}</select></label>
+  ${mat?`<div class="two"><label class="fld">Unidad<select id="rs-unit">${['u','g','kg','ml','l'].map(u=>`<option value="${u}" ${r.unit===u?'selected':''}>${u==='u'?'unidades':u}</option>`).join('')}</select></label><label class="fld">Stock inicial<input id="rs-stock" type="number" step="any" min="0" value="${r.stock||''}" placeholder="0"></label></div>
+  <label class="fld">Precio por unidad (opcional)<input id="rs-price" type="number" step="any" min="0" value="${r.price||''}" placeholder="por ${esc(r.unit||'u')}"></label>
+  <div class="why" style="font-size:13px">Cada tarea que use este material descuenta del stock. Ej.: 1 kg de azúcar y una tarea con 200 g: quedan 800 g.</div>`
+  :`<label class="fld">Costo por hora (opcional)<input id="rs-rate" type="number" step="any" min="0" value="${r.rate||''}" placeholder="0"></label>
+  ${k==='persona'?`<label class="pred"><label><input id="rs-me" type="checkbox" ${r.me?'checked':''}> <span>Soy yo (para sumar mis horas entre proyectos)</span></label></label>`:''}`}
+  <div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="saveres">Guardar</button></div>
+  ${isNew?'':`<button class="btn sm dng" data-act="delres" data-id="${r.id}" data-pid="${s.pid}">Eliminar recurso</button>`}`;
+}
+function taskResBlock(t){
+  const p=t.projectId&&projOf(t.projectId);if(!p)return '';
+  const res=p.resources||[];
+  let h=`<div class="fld">Costos y recursos (${esc(p.currency)})</div><div class="two"><label class="fld">Costo propio<input id="tk-cost" type="number" step="any" min="0" value="${t.cost||''}" placeholder="0"></label><label class="fld">Costo real<input id="tk-real" type="number" step="any" min="0" value="${t.realCost==null?'':t.realCost}" placeholder="igual al estimado"></label></div>`;
+  if(!res.length)return h+'<div class="mut small">Para asignar personas o materiales, primero cargalos en la pestaña Recursos del proyecto.</div>';
+  h+=res.map(r=>{
+    const a=(t.assign||[]).find(x=>x.rid===r.id),k=Core.resKind(r);
+    let ctl;
+    if(k==='material'){const fam=['g','kg'].includes(r.unit)?['g','kg']:['ml','l'].includes(r.unit)?['ml','l']:['u'];const cu=a&&a.unit||(r.unit==='kg'?'g':r.unit==='l'?'ml':r.unit);
+      ctl=`<input class="rq" type="number" step="any" min="0" aria-label="Cantidad" placeholder="cantidad" value="${a&&a.qty!=null?a.qty:''}"><select class="ru" aria-label="Unidad">${fam.map(u=>`<option value="${u}" ${cu===u?'selected':''}>${u==='u'?'unid.':u}</option>`).join('')}</select>`;}
+    else ctl=`<input class="rq" type="number" step="any" min="0" aria-label="Horas" placeholder="horas (toda la tarea)" value="${a&&a.qty!=null?a.qty:''}">`;
+    return `<div class="pred" data-res="${r.id}"><label><input type="checkbox" ${a?'checked':''}> <span>${esc(r.name)}</span></label><div class="predx">${ctl}</div></div>`;
+  }).join('');
+  return h;
+}
+
 function viewBandeja(){
   const items=db.tasks.filter(t=>!t.projectId&&!Core.hasChildren(db,t));
   const open=items.filter(t=>t.status!=='done'),done=items.filter(t=>t.status==='done');
@@ -738,6 +862,7 @@ function celebrateHTML(){
 function sheetHTML(){
   const s=S.sheet;let inner='';
   if(s.type==='task')inner=sheetTask(s);
+  else if(s.type==='res')inner=sheetRes(s);
   else if(s.type==='capture')inner=`<h2>Anotar</h2><form data-form="capsheet"><label class="fld">Lo que tengas en la cabeza<input id="capsheet-in" data-focus autocomplete="off" placeholder="Escribí y Enter"></label></form><div class="mut small" id="capcount">${s.n?`Anotadas: ${s.n}`:'Se guarda en la Bandeja. Ordenás después.'}</div><button class="btn blk" data-act="closesheet">Listo</button>`;
   else if(s.type==='newproj')inner=`<h2>Nuevo proyecto</h2><label class="fld">Nombre<input id="np-name" data-focus placeholder="Ej.: Reforma del baño"></label>
     <label class="fld">Plantilla<select id="np-tpl">${Object.entries(Core.TEMPLATES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join('')}</select></label>
@@ -774,7 +899,7 @@ function sheetHTML(){
   }else if(s.type==='importdone'){
     const r=s.res;
     inner=`<h2>Listo</h2><p style="margin:0">Se importaron <b>${r.count}</b> tareas${r.pid?' como proyecto':' a la Bandeja'}.</p>${r.loose.length?`<div class="warn"><b>¿Falta un enlace?</b> Estas tareas terminan antes del final y nadie las espera: ${r.loose.map(esc).join(', ')}.</div>`:''}<button class="btn pri blk" style="font-size:16px" data-act="closesheet">Ver</button>`;
-  }else if(s.type==='confirm')inner=`<h2>${esc(s.title)}</h2><p style="margin:0" class="mut">${esc(s.text)}</p><div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri dng" style="font-size:16px;background:#B42318;border-color:#B42318" data-act="${s.go}" data-id="${s.id||''}">${esc(s.ok||'Confirmar')}</button></div>`;
+  }else if(s.type==='confirm')inner=`<h2>${esc(s.title)}</h2><p style="margin:0" class="mut">${esc(s.text)}</p><div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri dng" style="font-size:16px;background:#B42318;border-color:#B42318" data-act="${s.go}" data-id="${s.id||''}" data-pid="${s.pid||''}">${esc(s.ok||'Confirmar')}</button></div>`;
   return `<div class="ov" data-ov="1"><div class="sheet" role="dialog" aria-modal="true">${inner}</div></div>`;
 }
 function sheetTask(s){
@@ -791,6 +916,7 @@ function sheetTask(s){
   ${phases.length?`<label class="fld">Fase<select id="tk-phase"><option value="">Sin fase</option>${phases.map(p=>`<option value="${p.id}" ${t.parentId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>`:''}
   <label class="pred"><label><input id="tk-star" type="checkbox" ${t.starred?'checked':''}> <span>Marcar como importante (máx. 3 por proyecto)</span></label></label>
   ${pool.length?`<div class="fld">Antes de esta tarea hay que terminar…</div>${pool.map(x=>{const p=(t.preds||[]).find(q=>q.id===x.id);return `<div class="pred" data-pred="${x.id}"><label><input type="checkbox" ${p?'checked':''}> <span>${esc(x.name)}</span></label><div class="predx"><select aria-label="Tipo de enlace"><option value="FS" ${(p&&p.type)==='FS'||!p?'selected':''}>Fin → inicio</option><option value="SS" ${p&&p.type==='SS'?'selected':''}>Inicio → inicio</option><option value="FF" ${p&&p.type==='FF'?'selected':''}>Fin → fin</option><option value="SF" ${p&&p.type==='SF'?'selected':''}>Inicio → fin</option></select><input type="number" step="any" aria-label="Demora en horas" placeholder="demora (h)" value="${p&&p.lag?p.lag/60:''}"></div></div>`;}).join('')}`:''}
+  ${taskResBlock(t)}
   <label class="fld">Notas<textarea id="tk-notes">${esc(t.notes||'')}</textarea></label>
   <div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="savetask">Guardar</button></div>
   ${isNew?'':`<div class="rw"><button class="btn sm" data-act="splitopen" data-id="${t.id}">Partir en pasos</button><button class="btn sm dng" data-act="deltask" data-id="${t.id}">Eliminar</button></div>`}`;
@@ -814,6 +940,7 @@ function finishTask(id){
   db.meta.timer=null;
   const t=taskOf(id),r=Core.rank(db,Date.now());
   S.celebrate={name:t.name,n:doneToday(),next:r[0]?r[0].task:null};
+  if(t.projectId){const lo=Core.stockInfo(db,t.projectId).filter(x=>x.real<0&&(t.assign||[]).some(a=>a.rid===x.r.id));if(lo.length)setTimeout(()=>toast('Ojo: no alcanzaba el stock de '+lo.map(x=>x.r.name).join(', ')+'.'),400);}
   S.offset=0;save();render();
 }
 function readTaskForm(){
@@ -834,7 +961,17 @@ function readTaskForm(){
       preds.push({id:el.dataset.pred,type:el.querySelector('.predx select').value,lag:isNaN(lag)?0:Math.round(lag*60)});
     }
   });
-  const ph=L.querySelector('#tk-phase');
+  const ph=L.querySelector('#tk-phase'),vv=id=>{const e=L.querySelector(id);return e?e.value:'';};
+  const assign=[];let bad=null;
+  L.querySelectorAll('[data-res]').forEach(el=>{
+    if(!el.querySelector('input[type=checkbox]').checked)return;
+    const q=el.querySelector('.rq').value,u=el.querySelector('.ru'),r=((projOf(t.projectId)||{}).resources||[]).find(x=>x.id===el.dataset.res);
+    if(r&&Core.resKind(r)==='material'&&q==='')bad=r.name;
+    assign.push({rid:el.dataset.res,qty:q===''?null:parseFloat(q.replace(',','.')),unit:u?u.value:null});
+  });
+  if(bad){toast('Poné la cantidad de «'+bad+'».');return;}
+  if(L.querySelector('#tk-cost')){t.cost=parseFloat(vv('#tk-cost'))||0;const rc=vv('#tk-real');t.realCost=rc===''?null:(parseFloat(rc)||0);}
+  t.assign=assign;
   t.name=name;t.durationMin=dur;t.due=parseDateVal(L.querySelector('#tk-due').value,true);t.resp=L.querySelector('#tk-resp').value.trim();
   t.starred=star;t.notes=L.querySelector('#tk-notes').value;t.preds=preds;
   if(ph)t.parentId=ph.value||null;
@@ -884,6 +1021,22 @@ function act(a,d,el){
     case 'openproj':S.pid=d.id;S.view='lista';S.calDay=null;render();window.scrollTo(0,0);break;
     case 'backproj':S.pid=null;S.view='lista';render();break;
     case 'view':S.view=d.v;render();break;
+    case 'addres':S.sheet={type:'res',pid:d.pid,draft:Core.newResource('','persona')};drawLayer();break;
+    case 'editres':S.sheet={type:'res',pid:d.pid,id:d.id};drawLayer();break;
+    case 'reskind':{
+      const s=S.sheet,L=$('#layer'),isNew=!s.id,r=isNew?s.draft:(projOf(s.pid).resources||[]).find(x=>x.id===s.id),nm=L.querySelector('#rs-name').value;
+      r.name=nm;r.kind=L.querySelector('#rs-kind').value;if(r.kind==='material'&&!r.unit)r.unit='u';drawLayer();break;}
+    case 'saveres':{
+      const s=S.sheet,L=$('#layer'),isNew=!s.id,p=projOf(s.pid),r=isNew?s.draft:p.resources.find(x=>x.id===s.id);
+      const name=L.querySelector('#rs-name').value.trim();if(!name){toast('Poné un nombre.');break;}
+      const num=id=>{const e=L.querySelector(id);return e?(parseFloat(e.value)||0):0;};
+      r.name=name;r.kind=L.querySelector('#rs-kind').value;
+      if(r.kind==='material'){r.unit=L.querySelector('#rs-unit').value;r.stock=num('#rs-stock');r.price=num('#rs-price');r.rate=0;r.me=false;}
+      else{r.rate=num('#rs-rate');const me=L.querySelector('#rs-me');r.me=!!(me&&me.checked);r.unit='';r.stock=0;r.price=0;}
+      if(isNew){p.resources=p.resources||[];p.resources.push(r);}
+      S.sheet=null;save();render();break;}
+    case 'delres':{const r=(projOf(d.pid).resources||[]).find(x=>x.id===d.id);S.sheet={type:'confirm',title:'¿Eliminar recurso?',text:`«${r.name}» se quita del proyecto y de las tareas donde estaba asignado.`,go:'dodelres',id:d.id,pid:d.pid,ok:'Eliminar'};drawLayer();break;}
+    case 'dodelres':Core.removeResource(db,S.sheet.pid,d.id);S.sheet=null;save();render();break;
     case 'gzoom':S.gz=d.d==='0'?1:Math.max(0.4,Math.min(8,d.d==='+'?S.gz*1.5:S.gz/1.5));render();break;
     case 'calall':S.calAll=true;S.tab='proyectos';S.pid=null;render();window.scrollTo(0,0);break;
     case 'calback':S.calAll=false;render();break;
@@ -977,6 +1130,7 @@ document.addEventListener('submit',e=>{
 });
 document.addEventListener('change',e=>{
   const t=e.target;
+  if(t.id==='rs-kind'&&S.sheet&&S.sheet.type==='res'){act('reskind',{},t);return;}
   if(t.id==='f-xml'&&t.files[0]){
     t.files[0].text().then(txt=>{
       try{const pa=Core.parseMSProject(txt);if(!pa.tasks.length)throw new Error('No encontré tareas en el archivo.');S.sheet={type:'import',parsed:pa,mode:pa.suggest};drawLayer();}
