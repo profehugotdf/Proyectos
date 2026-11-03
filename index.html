@@ -261,11 +261,11 @@ viaje:{label:'Proyectar un viaje',rows:[
 ['Preparar','Armar itinerario',1440,[3,4]],['Preparar','Armar equipaje',1440,[5,6]],['Preparar','Último chequeo y cambio de moneda',480,[7]]]}
 };
 function defaultStart(now){const d=new Date(now||Date.now());d.setHours(9,0,0,0);return d.getTime();}
-function makeProject(db,key,name,start,now){
+function makeProject(db,key,name,start,now,rowsOver){
   now=now||Date.now();
   const p={id:uid(),name:name||TEMPLATES[key].label,start:start!=null?start:defaultStart(now),currency:db.meta.currency||'ARS',fx:1,fxDate:null,resources:[],createdAt:now};
   db.projects.push(p);
-  const rows=(TEMPLATES[key]||TEMPLATES.vacio).rows,groups={},ids=[];
+  const rows=rowsOver||(TEMPLATES[key]||TEMPLATES.vacio).rows,groups={},ids=[];
   rows.forEach((r,i)=>{
     let parent=null;
     if(r[0]){
@@ -377,6 +377,69 @@ function ecoAplicarBloques(db,bloques){
 function anchorProject(db,pid,taskId,targetMs){
   const p=db.projects.find(x=>x.id===pid),sc=schedule(db,pid),s=sc.map[taskId];if(!p||!s)return null;
   const old=p.start;p.start=old+(targetMs-s.es);return {oldStart:old,newStart:p.start};
+}
+
+/* ---------- asistente de armado de proyectos ---------- */
+const WIZ_KINDS=[
+  {id:'reforma',icon:'🏠',label:'Reforma u obra',hint:'Casa, baño, cocina…',tpl:'reforma',lists:['vacia:Compras'],qs:[
+    {id:'contr',q:'¿Vas a contratar a alguien para la obra?',drop:['Pedir presupuestos','Elegir contratista']},
+    {id:'demo',q:'¿Hay que demoler algo?',drop:['Demolición']},
+    {id:'inst',q:'¿Hay instalaciones nuevas (agua, gas, electricidad)?',drop:['Instalaciones']},
+    {id:'rev',q:'¿Hay revoques o contrapisos?',drop:['Revoques']},
+    {id:'pisos',q:'¿Vas a cambiar pisos o revestimientos?',drop:['Pisos y revestimientos']}]},
+  {id:'evento',icon:'🏁',label:'Organizar un evento o carrera',hint:'Triatlón, travesía, torneo',tpl:'triatlon',lists:['evento'],qs:[
+    {id:'aut',q:'¿Necesitás autorización de alguna autoridad (prefectura, municipio)?',drop:['Pedir autorización']},
+    {id:'seg',q:'¿Hace falta contratar un seguro?',drop:['Contratar seguro']},
+    {id:'cro',q:'¿Va a haber cronometraje?',drop:['Armar cronometraje']},
+    {id:'ins',q:'¿Hay inscripciones previas?',drop:['Abrir inscripciones']}]},
+  {id:'ironman',icon:'🏊',label:'Prepararme para una carrera larga',hint:'Ironman u otra prueba exigente',tpl:'ironman',lists:['ironman_semana','ironman_natacion','ironman_t1','ironman_t2'],qs:[
+    {id:'via',q:'¿Tenés que viajar para la carrera?',drop:['Reservar pasajes','Reservar alojamiento','Resolver el traslado']},
+    {id:'med',q:'¿Te hace falta el chequeo médico y el apto físico?',drop:['Chequeo médico']},
+    {id:'neo',q:'¿Vas a nadar con neoprene en aguas abiertas?',drop:['Neoprene']},
+    {id:'seg',q:'¿Necesitás tramitar seguro o licencia?',drop:['Seguro y licencia']}]},
+  {id:'viaje',icon:'🧳',label:'Proyectar un viaje',hint:'Destino, reservas, equipaje',tpl:'viaje',lists:['viaje'],qs:[
+    {id:'dest',q:'¿Todavía tenés que elegir el destino?',drop:['Elegir destino']},
+    {id:'tra',q:'¿Hay que reservar transporte?',drop:['Reservar transporte']},
+    {id:'alo',q:'¿Hay que reservar alojamiento?',drop:['Reservar alojamiento']},
+    {id:'doc',q:'¿Hay documentos, seguros o vacunas para revisar?',drop:['Revisar documentos']}]},
+  {id:'guitarra',icon:'🎸',label:'Construir algo a mano',hint:'Una guitarra, un mueble…',tpl:'guitarra',lists:['vacia:Compras'],qs:[
+    {id:'pla',q:'¿Te falta conseguir los planos?',drop:['Conseguir planos']},
+    {id:'mat',q:'¿Te falta comprar los materiales?',drop:['Comprar maderas']}]},
+  {id:'cocina',icon:'🍰',label:'Cocinar algo elaborado',hint:'Una receta con varios pasos',tpl:'pastel',lists:[],qs:[
+    {id:'ing',q:'¿Te falta comprar ingredientes?',drop:['Comprar ingredientes']}]},
+  {id:'otro',icon:'✨',label:'Otra cosa, desde cero',hint:'Escribís los pasos vos',tpl:null,lists:[],qs:[]},
+  {id:'tareas',icon:'📝',label:'Pendientes sueltos',hint:'Van directo a la Bandeja',tpl:null,lists:[],qs:[]}
+];
+function wizRows(kind,dropNames){
+  const base=(TEMPLATES[kind.tpl]||TEMPLATES.vacio).rows.map((r,i)=>({i,g:r[0],n:r[1],d:r[2],p:r[3].slice()}));
+  const gone=new Set(base.filter(r=>(dropNames||[]).some(n=>r.n.startsWith(n))).map(r=>r.i)),byI=new Map(base.map(r=>[r.i,r]));
+  const resolve=i=>gone.has(i)?byI.get(i).p.flatMap(resolve):[i];
+  const kept=base.filter(r=>!gone.has(r.i)),idx=new Map(kept.map((r,k)=>[r.i,k]));
+  return kept.map(r=>[r.g,r.n,r.d,[...new Set(r.p.flatMap(resolve))].map(j=>idx.get(j))]);
+}
+function wizStepsRows(items,chain){return items.map((x,i)=>[null,x.name,x.durationMin!=null?x.durationMin:60,chain&&i>0?[i-1]:[]]);}
+/* mueve el inicio para que el proyecto TERMINE en la fecha pedida */
+function anchorFinish(db,pid,targetMs){
+  const p=db.projects.find(x=>x.id===pid),sc=schedule(db,pid);if(!p||!sc.count)return null;
+  const old=p.start;p.start=old+(targetMs-sc.finish);return {oldStart:old,newStart:p.start};
+}
+/* arma el proyecto del asistente; w = respuestas. Devuelve {pid, tareas, avisos} */
+function wizBuild(db,w,now){
+  now=now||Date.now();const kind=WIZ_KINDS.find(k=>k.id===w.kind),ans=w.ans||{};
+  const drops=[];(kind.qs||[]).forEach(q=>{if(ans[q.id]==='no')drops.push(...q.drop);});
+  const rows=kind.tpl?wizRows(kind,drops):wizStepsRows(w.steps||[],w.chain!==false);
+  let start=defaultStart(now);
+  if(w.when==='inicio'&&w.date){start=w.dateMs;}
+  const p=makeProject(db,'vacio',w.name||kind.label,start,now,rows);
+  const avisos=[];
+  if(w.when==='fin'&&w.dateMs){const r=anchorFinish(db,p.id,w.dateMs);if(r&&r.newStart<now)avisos.push({tipo:'tarde',inicio:r.newStart});}
+  p.resources=p.resources||[];
+  if(w.me){const r=newResource(w.myName||'Yo','persona');r.me=true;p.resources.push(r);}
+  String(w.people||'').split('\n').map(x=>x.trim()).filter(Boolean).forEach(n=>p.resources.push(newResource(n,'persona')));
+  String(w.mats||'').split('\n').map(x=>x.trim()).filter(Boolean).forEach(n=>p.resources.push(newResource(n,'material')));
+  if(+w.budget>0)p.budget=+w.budget;
+  if(w.lists!==false)(kind.lists||[]).forEach(k=>{const [t,nm]=k.split(':');newList(db,nm?nm+': '+p.name:(LIST_TEMPLATES[t]||{}).label.replace('Ironman: ',''),p.id,t,now);});
+  return {pid:p.id,tareas:db.tasks.filter(t=>t.projectId===p.id&&!hasChildren(db,t)).length,avisos};
 }
 
 /* ---------- listas de chequeo ---------- */
@@ -573,7 +636,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -581,7 +644,7 @@ return {ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorPr
 (function(){
 'use strict';
 let db=null;
-const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,dec:null,listId:null,listsAll:false,showDone:false};
+const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,dec:null,listId:null,listsAll:false,showDone:false,wiz:null};
 let installEv=null,persisted=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEv=e;if(S.tab==='mas'&&!S.sheet)render();});
 window.addEventListener('appinstalled',()=>{installEv=null;toast('Instalada.');if(S.tab==='mas')render();});
@@ -691,6 +754,7 @@ function viewHoy(){
 }
 
 function viewProyectos(){
+  if(S.wiz)return viewWizard();
   if(S.listId&&listOf(S.listId))return viewList(listOf(S.listId));
   if(S.pid&&projOf(S.pid))return viewProyecto(S.pid);
   if(S.listsAll)return viewListas(null);
@@ -701,7 +765,7 @@ function viewProyectos(){
     h+=`<button class="card" style="text-align:left;width:100%;gap:8px;cursor:pointer" data-act="openproj" data-id="${p.id}"><div class="big-t" style="font-size:20px;line-height:26px">${esc(p.name)}</div>
     <div class="bar"><i style="width:${pr.pct}%"></i></div><div class="mut small">${pr.pct} % · ${pr.done} de ${pr.total} hechas${sc.count?' · termina '+esc(fmtDate(sc.finish,sc.fine)):''}</div></button>`;
   });
-  h+=`<div class="rw" style="margin-top:6px"><button class="btn pri" style="font-size:16px" data-act="newproj">Nuevo proyecto</button><button class="btn" data-act="goimport">Importar XML</button></div>`;
+  h+=`<button class="btn pri blk" style="font-size:16px;margin-top:6px" data-act="wstart">Armar un proyecto con el asistente</button><div class="rw" style="margin-top:8px"><button class="btn" data-act="newproj">Desde una plantilla</button><button class="btn" data-act="goimport">Importar XML</button></div>`;
   if(db.projects.length)h+=`<button class="btn" style="width:100%;margin-top:8px" data-act="calall">Calendario de todos los proyectos</button>`;
   h+=`<button class="btn" style="width:100%;margin-top:8px" data-act="listsall">Listas de chequeo${(db.lists||[]).length?' ('+db.lists.length+')':''}</button>`;
   return h;
@@ -939,9 +1003,10 @@ function viewRecursos(pid){
 }
 function viewCostos(pid){
   const p=projOf(pid),c=Core.projectCosts(db,pid),cur=p.currency,base=db.meta.currency,m=v=>esc(Core.money(v,cur));
-  if(!c.plan)return emptyView('Todavía no hay costos. Cargá el costo por hora de tus recursos, el precio de los materiales o un costo propio en cada tarea.');
+  if(!c.plan)return (p.budget>0?`<div class="card" style="gap:4px"><div class="lab">Presupuesto máximo</div><div class="big-t">${m(p.budget)}</div></div>`:'')+emptyView('Todavía no hay costos. Cargá el costo por hora de tus recursos, el precio de los materiales o un costo propio en cada tarea.');
   const pct=c.plan?Math.min(100,Math.round(c.spent/c.plan*100)):0;
-  let h=`<div class="card" style="gap:10px"><div class="lab">Presupuesto estimado</div><div class="big-t">${m(c.plan)}</div><div class="bar"><i style="width:${pct}%"></i></div><div class="mut small">Gastado ${m(c.spent)} · falta ${m(c.pending)}</div>${cur!==base?`<div class="mut small">En ${esc(base)} (cambio ${esc(String(c.fx))}${p.fxDate?' al '+esc(fmtDate(p.fxDate)):''}): ${esc(Core.money(c.planBase,base))}</div>`:''}</div>`;
+  const bud=p.budget>0?`<div class="${c.plan>p.budget?'warn':'mut small'}" style="${c.plan>p.budget?'':''}">Presupuesto máximo ${m(p.budget)}: ${c.plan>p.budget?'el estimado lo pasa por '+m(c.plan-p.budget)+'.':'te quedan '+m(p.budget-c.plan)+' de margen.'}</div>`:'';
+  let h=`<div class="card" style="gap:10px"><div class="lab">Presupuesto estimado</div><div class="big-t">${m(c.plan)}</div><div class="bar"><i style="width:${pct}%"></i></div><div class="mut small">Gastado ${m(c.spent)} · falta ${m(c.pending)}</div>${bud}${cur!==base?`<div class="mut small">En ${esc(base)} (cambio ${esc(String(c.fx))}${p.fxDate?' al '+esc(fmtDate(p.fxDate)):''}): ${esc(Core.money(c.planBase,base))}</div>`:''}</div>`;
   const st=Core.stockInfo(db,pid).filter(x=>x.missing>0);
   if(st.length)h+=`<div class="warn" style="margin-bottom:10px"><b>Para comprar:</b> ${st.map(x=>`${esc(x.r.name)} (${esc(bestUnit(x.missing,x.r.unit))})${x.r.price?' ≈ '+esc(Core.money(x.missing*x.r.price,cur)):''}`).join(', ')}.<div style="margin-top:8px"><button class="btn sm" data-act="shoplist" data-pid="${pid}">Armar lista de compras</button></div></div>`;
   h+=`<div class="sec">Por tarea</div>`;
@@ -1111,6 +1176,72 @@ function anchorBlock(pid){
   ${ev.length?`<div class="mut small">Eventos de Mi plan:</div><div class="rw" style="flex-wrap:wrap;gap:6px">${ev.map(e=>`<button class="chip" data-act="anevent" data-d="${esc(e.fecha)}">🏁 ${esc(e.nombre)} · ${esc(e.fecha.split('-').reverse().join('/'))}</button>`).join('')}</div>`:''}
   <div class="two"><label class="fld">Fecha<input id="an-date" type="date"></label><label class="fld">Hora<input id="an-time" type="time" value="08:00"></label></div>
   <button class="btn blk" data-act="doanchor" data-id="${pid}">Calcular el inicio desde esa fecha</button>`;
+}
+
+/* ---------- asistente de armado (UI) ---------- */
+function wizSteps(w){
+  const k=Core.WIZ_KINDS.find(x=>x.id===w.kind);
+  if(!k)return ['kind'];
+  if(k.id==='tareas')return ['kind','steps','review'];
+  const a=['kind','name'];if(k.qs.length)a.push('qs');if(!k.tpl)a.push('steps');
+  a.push('when','people','mats','review');return a;
+}
+function wizShell(w,title,sub,body,foot){
+  const st=wizSteps(w),i=st.indexOf(w.step);
+  return `<div class="hdr"><button class="back" data-act="wexit" aria-label="Salir del asistente">${svg('back',24,2.2)}</button><h1 style="font-size:22px">Armar un proyecto</h1></div>
+  <div style="padding:0 4px 8px"><div style="font-size:14px;line-height:20px"><b>Paso ${i+1} de ${st.length}</b></div><div class="bar" style="margin-top:6px"><i style="width:${Math.round((i+1)/st.length*100)}%"></i></div></div>
+  <div style="font-size:20px;line-height:26px;font-weight:700;padding:4px 4px 6px">${title}</div>${sub?`<p class="mut" style="margin:0 4px 10px">${sub}</p>`:''}${body}<div class="rw" style="margin-top:14px">${foot}</div>`;
+}
+const wizFoot=(last)=>`<button class="btn" data-act="wback">Atrás</button><button class="btn pri" style="font-size:16px;flex:2" data-act="wnext">${last||'Siguiente'}</button>`;
+function viewWizard(){
+  const w=S.wiz,k=Core.WIZ_KINDS.find(x=>x.id===w.kind);
+  if(w.step==='kind')return `<div class="hdr"><button class="back" data-act="wexit" aria-label="Salir del asistente">${svg('back',24,2.2)}</button><h1 style="font-size:22px">Armar un proyecto</h1></div><div style="font-size:20px;line-height:26px;font-weight:700;padding:4px 4px 6px">¿Qué querés lograr?</div><p class="mut" style="margin:0 4px 10px">Elegí lo que más se parezca. Después lo ajustás.</p>`+Core.WIZ_KINDS.map(x=>`<button class="card" style="text-align:left;width:100%;gap:2px;margin-bottom:8px;cursor:pointer" data-act="wkind" data-id="${x.id}"><div class="big-t" style="font-size:18px;line-height:24px">${x.icon} ${esc(x.label)}</div><div class="mut small">${esc(x.hint)}</div></button>`).join('');
+  if(w.step==='name')return wizShell(w,'¿Cómo lo llamamos?','',`<label class="fld">Nombre<input id="w-name" data-focus value="${esc(w.name||'')}" placeholder="${esc(k.label)}"></label>`,wizFoot());
+  if(w.step==='qs')return wizShell(w,'Contame un poco más','Sacamos lo que no te hace falta, así queda solo lo que importa.',k.qs.map(q=>{const v=(w.ans||{})[q.id]||'si';return `<div class="card" style="margin-bottom:8px;gap:8px;padding:12px"><div style="font-size:16px">${esc(q.q)}</div><div class="rw"><button class="btn sm ${v==='si'?'pri':''}" data-act="wans" data-q="${q.id}" data-v="si" aria-pressed="${v==='si'}">Sí</button><button class="btn sm ${v==='no'?'pri':''}" data-act="wans" data-q="${q.id}" data-v="no" aria-pressed="${v==='no'}">No</button></div></div>`;}).join(''),wizFoot());
+  if(w.step==='steps'){
+    const tareas=w.kind==='tareas';
+    return wizShell(w,tareas?'¿Qué tenés pendiente?':'¿Cuáles son los pasos principales?',tareas?'Una cosa por línea. Si querés, al final poné cuánto tarda (10 min, 2 h). Van a la Bandeja.':'Un paso por línea, en el orden en que los harías. Si querés, al final poné la duración (30 min, 2 h).',`<label class="fld">${tareas?'Pendientes':'Pasos'}<textarea id="w-steps" data-focus style="min-height:170px" placeholder="Comprar pintura&#10;Lijar la pared 2 h&#10;Pintar 3 h">${esc(w.stepsText||'')}</textarea></label>${tareas?'':`<div class="pred"><label><input id="w-chain" type="checkbox" ${w.chain!==false?'checked':''}> <span>Cada paso empieza cuando termina el anterior</span></label></div>`}`,wizFoot(tareas?'Ver resumen':'Siguiente'));
+  }
+  if(w.step==='when')return wizShell(w,'¿Para cuándo?','Si hay una fecha, calculo desde cuándo conviene empezar.',`<div style="display:flex;flex-direction:column;gap:8px">${[['fin','Tengo una fecha límite','Tiene que estar listo el…'],['inicio','Quiero empezar un día puntual','Arranca el…'],['ya','Sin fecha, empiezo ya','Arranca hoy']].map(([v,t,h])=>`<button data-act="wwhen" data-v="${v}" aria-pressed="${w.when===v}" style="min-height:56px;box-sizing:border-box;padding:8px 14px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;border:${w.when===v?'2px solid #0F766E':'1px solid #CFC9BA'};border-radius:12px;background:${w.when===v?'#E3F1EE':'#fff'};color:#1D2327;text-align:left"><b style="font-size:16px">${t}</b><span class="mut small">${h}</span></button>`).join('')}</div>${w.when&&w.when!=='ya'?`<label class="fld" style="margin-top:10px">Fecha<input id="w-date" type="date" value="${esc(w.date||'')}"></label>`:''}`,wizFoot());
+  if(w.step==='people')return wizShell(w,'¿Quién participa?','Los vas a poder asignar a cada tarea. Podés dejarlo vacío.',`<div class="pred"><label><input id="w-me" type="checkbox" ${w.me?'checked':''}> <span>Yo participo (cuento mis horas)</span></label></div><label class="fld">Otras personas, una por línea<textarea id="w-people" placeholder="Albañil&#10;Mi hermano">${esc(w.people||'')}</textarea></label>`,wizFoot());
+  if(w.step==='mats')return wizShell(w,'¿Qué materiales vas a usar?','Opcional. Después en Recursos les cargás stock, unidad y precio.',`<label class="fld">Materiales, uno por línea<textarea id="w-mats" placeholder="Cemento&#10;Cerámicos&#10;Pintura">${esc(w.mats||'')}</textarea></label><label class="fld">Presupuesto máximo (opcional)<input id="w-budget" type="number" step="any" min="0" inputmode="decimal" value="${esc(w.budget||'')}" placeholder="0"></label>`,wizFoot());
+  /* resumen */
+  if(w.kind==='tareas'){const n=Core.wizStepsRows(w.steps||[],false).length;return wizShell(w,'Listo para guardar',`${n} pendiente${n===1?'':'s'} van a la Bandeja.`,'',wizFoot('Guardar en la Bandeja'));}
+  const tmp=Core.newDB();tmp.meta.currency=db.meta.currency;const r=Core.wizBuild(tmp,w,Date.now()),sc=Core.schedule(tmp,r.pid),pp=tmp.projects[0];
+  const li=tmp.lists||[];
+  let body=`<div class="card" style="gap:6px"><div class="big-t" style="font-size:20px;line-height:26px">${esc(pp.name)}</div><div>${r.tareas} tareas · ${esc(fmtDur(Math.round((sc.finish-sc.start)/60000)))}</div><div class="mut small">Empieza ${esc(fmtDate(sc.start,false))} · termina ${esc(fmtDate(sc.finish,false))}</div>${pp.resources.length?`<div class="mut small">Recursos: ${pp.resources.map(x=>esc(x.name)).join(', ')}</div>`:''}${pp.budget?`<div class="mut small">Presupuesto máximo: ${esc(Core.money(pp.budget,pp.currency))}</div>`:''}</div>`;
+  if(r.avisos.length)body+=`<div class="warn" style="margin-top:8px"><b>Ojo con el plazo.</b> Para llegar a esa fecha tendrías que haber empezado el ${esc(fmtDate(r.avisos[0].inicio,false))}. Podés crearlo igual y acortar o quitar tareas.</div>`;
+  if((k.lists||[]).length)body+=`<div class="pred" style="margin-top:8px"><label><input id="w-lists" type="checkbox" ${w.lists!==false?'checked':''}> <span>Crear también ${li.length===1?'la lista':'las '+li.length+' listas'} de chequeo: ${li.map(l=>esc(l.name)).join(', ')}</span></label></div>`;
+  return wizShell(w,'Así quedaría',"Revisalo; después se edita todo.",body,wizFoot('Crear proyecto'));
+}
+function wizRead(){
+  const w=S.wiz,L=$('#app'),v=id=>{const e=L.querySelector(id);return e?e.value:null;};
+  if(w.step==='name'){const n=v('#w-name');if(n!=null)w.name=n.trim();}
+  if(w.step==='steps'){const t=v('#w-steps');if(t!=null){w.stepsText=t;w.steps=parseSteps(t);}const c=L.querySelector('#w-chain');if(c)w.chain=c.checked;}
+  if(w.step==='when'){const d=L.querySelector('#w-date');if(d){w.date=d.value;w.dateMs=d.value?parseDT(d.value,'09:00'):null;}}
+  if(w.step==='people'){const m=L.querySelector('#w-me');if(m)w.me=m.checked;const p=v('#w-people');if(p!=null)w.people=p;}
+  if(w.step==='mats'){const m=v('#w-mats');if(m!=null)w.mats=m;const b=v('#w-budget');if(b!=null)w.budget=b;}
+  if(w.step==='review'){const l=L.querySelector('#w-lists');if(l)w.lists=l.checked;}
+}
+function wizNext(){
+  wizRead();const w=S.wiz,st=wizSteps(w),i=st.indexOf(w.step);
+  if(w.step==='name'&&!w.name){toast('Poné un nombre.');return;}
+  if(w.step==='steps'&&!(w.steps||[]).length){toast('Escribí al menos uno.');return;}
+  if(w.step==='when'){if(!w.when){toast('Elegí una opción.');return;}if(w.when!=='ya'&&!w.dateMs){toast('Poné la fecha.');return;}}
+  if(w.step==='review'){wizFinish();return;}
+  w.step=st[i+1];render();window.scrollTo(0,0);
+}
+function wizBack(){wizRead();const w=S.wiz,st=wizSteps(w),i=st.indexOf(w.step);if(i<=0){S.wiz=null;}else w.step=st[i-1];render();window.scrollTo(0,0);}
+function wizFinish(){
+  const w=S.wiz;
+  if(w.kind==='tareas'){
+    (w.steps||[]).forEach(x=>db.tasks.push({id:Core.uid(),projectId:null,parentId:null,name:x.name,durationMin:x.durationMin,status:'todo',percent:0,preds:[],starred:false,resp:'',notes:'',due:null,createdAt:Date.now()}));
+    S.wiz=null;S.tab='bandeja';save();render();toast('Listo: quedaron en la Bandeja.');return;
+  }
+  w.myName=db.meta.name||'Yo';
+  const r=Core.wizBuild(db,w,Date.now());
+  S.wiz=null;S.tab='proyectos';S.pid=r.pid;S.view='lista';S.listId=null;save();render();window.scrollTo(0,0);
+  toast(r.avisos.length?'Creado. Ojo: el plazo es justo.':'Proyecto creado. Revisá las duraciones.');
 }
 
 function viewBandeja(){
@@ -1421,7 +1552,7 @@ function parseSteps(text){
 
 function act(a,d,el){
   switch(a){
-    case 'tab':S.tab=d.tab;S.avail=false;S.dec=null;S.listId=null;S.listsAll=false;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
+    case 'tab':S.tab=d.tab;S.wiz=null;S.avail=false;S.dec=null;S.listId=null;S.listsAll=false;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
     case 'toggle':{const t=taskOf(d.id);if(!t)break;if(t.status==='done'){Core.reopen(db,d.id);save();render();}else{finishTask(d.id);}break;}
     case 'other':S.offset++;render();break;
     case 'start':startTimer(d.id);break;
@@ -1478,6 +1609,13 @@ function act(a,d,el){
     case 'dinbox':{const x=decOf(S.dec),r=Core.ahpSolve(x);if(addInbox('Hacer: '+x.options[r.order[0]]+' ('+x.name+')')){toast('Anotado en la Bandeja.');}break;}
     case 'ddel':{const x=decOf(d.id);S.sheet={type:'confirm',title:'¿Eliminar decisión?',text:`«${x.name}» se borra con todas sus comparaciones.`,go:'dodeldec',id:d.id,ok:'Eliminar'};drawLayer();break;}
     case 'dodeldec':db.decisions=db.decisions.filter(y=>y.id!==d.id);S.dec=null;S.sheet=null;save();render();break;
+    case 'wstart':S.tab='proyectos';S.pid=null;S.wiz={step:'kind',kind:null,name:'',ans:{},when:null,date:'',me:true,people:'',mats:'',budget:'',steps:[],stepsText:'',chain:true,lists:true};render();window.scrollTo(0,0);break;
+    case 'wexit':S.wiz=null;render();break;
+    case 'wkind':{const k=Core.WIZ_KINDS.find(x=>x.id===d.id);S.wiz.kind=d.id;S.wiz.ans={};S.wiz.name=S.wiz.name||'';S.wiz.step=wizSteps(S.wiz)[1];render();window.scrollTo(0,0);break;}
+    case 'wans':S.wiz.ans[d.q]=d.v;wizRead();render();break;
+    case 'wwhen':wizRead();S.wiz.when=d.v;render();break;
+    case 'wnext':wizNext();break;
+    case 'wback':wizBack();break;
     case 'ecoopen':S.sheet={type:'eco'};drawLayer();break;
     case 'ecoapply':{const n=Core.ecoAplicarBloques(db,Core.ecoBloques(ecoRead,todayISO()));S.sheet=null;save();render();toast(n?`Traje ${n} bloque${n===1?'':'s'} protegido${n===1?'':'s'}.`:'No había nada para traer.');break;}
     case 'anevent':{const e=$('#an-date');if(e)e.value=d.d;break;}
