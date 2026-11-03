@@ -331,6 +331,54 @@ function buildImport(db,parsed,opt){
   });
   return {pid,count:made.length,links:parsed.links,loose:pid?looseEnds(db,pid):[]};
 }
+/* ---------- ecosistema: lectura de Mi plan y apps hermanas (solo lectura) ---------- */
+const ECO_DISC={natacion:'Natación',bici:'Ciclismo',carrera:'Carrera',fuerza:'Fuerza',kayak:'Kayak'};
+function ecoEventos(read,todayISO){
+  const out=[],st=read('plan_ciclos_v1');
+  if(st&&st.ciclos)Object.values(st.ciclos).forEach(c=>{if(c&&c.eventoNombre&&c.eventoFecha&&c.eventoFecha>=todayISO)out.push({nombre:c.eventoNombre,fecha:c.eventoFecha});});
+  const pe=read('entrenamiento_proximo_evento');
+  if(pe&&pe.fecha&&pe.fecha>=todayISO&&!out.some(e=>e.fecha===pe.fecha))out.push({nombre:pe.nombreEvento||'Evento',fecha:pe.fecha});
+  return out.sort((a,b)=>a.fecha<b.fecha?-1:a.fecha>b.fecha?1:0);
+}
+function ecoCiclo(read,todayISO){
+  const st=read('plan_ciclos_v1');if(!st||!st.ciclos)return null;
+  const L=Object.values(st.ciclos).filter(c=>c&&c.fechaInicio&&c.totalDias);
+  const fin=c=>{const d=new Date(c.fechaInicio+'T00:00:00');d.setDate(d.getDate()+c.totalDias-1);return dateKey(d.getTime());};
+  const cur=L.find(c=>c.fechaInicio<=todayISO&&todayISO<=fin(c));if(cur)return cur;
+  return L.filter(c=>c.fechaInicio>todayISO).sort((a,b)=>a.fechaInicio<b.fechaInicio?-1:1)[0]||null;
+}
+function ecoDuracionMin(read,disc){
+  const key={carrera:'correr_sesiones',bici:'bici_sesiones',kayak:'kayak_sesiones',fuerza:'fuerza_sesiones'}[disc];if(!key)return null;
+  const L=read(key);if(!Array.isArray(L))return null;
+  const mins=L.slice(-12).map(x=>{const sec=disc==='bici'?x.dur:(x.duracionSeg!=null?x.duracionSeg:(x.duracionMin!=null?x.duracionMin*60:null));return sec>0?sec/60:null;}).filter(Boolean).sort((a,b)=>a-b);
+  if(mins.length<2)return null;
+  return Math.max(15,Math.round(mins[Math.floor(mins.length/2)]/5)*5);
+}
+/* bloques protegidos a partir del horario semanal del ciclo vigente de Mi plan */
+function ecoBloques(read,todayISO){
+  const c=ecoCiclo(read,todayISO);if(!c||!c.disciplinas)return [];
+  const out=[];
+  Object.keys(c.disciplinas).forEach(k=>{
+    const by={};
+    (c.disciplinas[k].horario||[]).forEach(h=>{if(h&&h.dia!=null&&hm(h.hora)!=null)(by[h.hora]=by[h.hora]||[]).push(+h.dia);});
+    Object.keys(by).forEach(hora=>{
+      const real=ecoDuracionMin(read,k),min=real||60,end=Math.min(23*60+59,hm(hora)+min);
+      out.push({disc:k,label:ECO_DISC[k]||k,days:[...new Set(by[hora])].sort(),start:hora,end:String(Math.floor(end/60)).padStart(2,'0')+':'+String(end%60).padStart(2,'0'),min,estimada:!real});
+    });
+  });
+  return out;
+}
+function ecoAplicarBloques(db,bloques){
+  const a=availOf(db);a.blocks=a.blocks.filter(b=>b.src!=='miplan');
+  bloques.forEach(b=>a.blocks.push({id:uid(),label:'Entrenamiento: '+b.label,kind:'protected',days:b.days,start:b.start,end:b.end,src:'miplan'}));
+  return bloques.length;
+}
+/* mueve el inicio del proyecto para que una tarea caiga justo en una fecha (cálculo hacia atrás) */
+function anchorProject(db,pid,taskId,targetMs){
+  const p=db.projects.find(x=>x.id===pid),sc=schedule(db,pid),s=sc.map[taskId];if(!p||!s)return null;
+  const old=p.start;p.start=old+(targetMs-s.es);return {oldStart:old,newStart:p.start};
+}
+
 /* ---------- listas de chequeo ---------- */
 const LIST_TEMPLATES={
   vacia:{label:'Vacía',items:[]},
@@ -525,7 +573,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -954,6 +1002,7 @@ function viewAvail(){
   const a=Core.availOf(db),c=a.cap;
   let h=`<div class="hdr"><button class="back" data-act="availback" aria-label="Volver a Más">${svg('back',24,2.2)}</button><h1>Mi disponibilidad</h1></div>
   <p class="mut" style="margin:0 4px 10px">Tus horas son una sola para todos los proyectos. Lo protegido no se toca: si una tarea lo pisa, te aviso.</p>
+  <div class="card" style="gap:8px"><div class="lab">Mi plan de entrenamiento</div><button class="btn blk" data-act="ecoopen">Traer mis horarios de entrenamiento</button><div class="mut small">Lee los días y horas de cada disciplina que cargaste en Mi plan y los protege.</div></div>
   <div class="card" style="gap:8px"><div class="lab">Mi semana</div>${weekStrip()}<div class="mut small"><b style="color:#5B6166">▮</b> ocupado (clases, trabajo) · <b style="color:#0F766E">▮</b> protegido (entrenamiento) · blanco: libre</div></div>
   <div class="sec">Bloques</div>`;
   if(!a.blocks.length)h+=emptyView('Cargá tus clases y tus entrenamientos para que el calendario sepa cuándo estás libre.');
@@ -1041,6 +1090,27 @@ async function shareList(l){
   const txt=`*${l.name}*\n`+l.items.map(i=>`${i.done?'✅':'⬜'} ${i.text}`).join('\n');
   try{if(navigator.share){await navigator.share({text:txt});return;}}catch(e){if(e&&e.name==='AbortError')return;}
   try{await navigator.clipboard.writeText(txt);toast('Lista copiada.');}catch(e){download(l.name+'.txt',txt,'text/plain');}
+}
+
+/* ---------- ecosistema (UI) ---------- */
+const ecoRead=k=>{try{return JSON.parse(localStorage.getItem(k));}catch(e){return null;}};
+const todayISO=()=>Core.dateKey(Date.now());
+function sheetEco(s){
+  const B=Core.ecoBloques(ecoRead,todayISO()),DN=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  if(!B.length)return `<h2>Horarios de Mi plan</h2><p class="mut" style="margin:0">No encontré horarios de entrenamiento. En Mi plan, en Ciclo → «Días de la semana por disciplina», cargá los días y la hora de cada una; después volvé acá. También los podés cargar a mano como bloques protegidos.</p><button class="btn blk" data-act="closesheet">Entendido</button>`;
+  return `<h2>Horarios de Mi plan</h2><p class="mut" style="margin:0">Esto es lo que tenés cargado en tu ciclo. Los traigo como bloques protegidos.</p>
+  ${B.map(b=>`<div class="card" style="margin:0;padding:12px;gap:2px"><b>${esc(b.label)}</b><div class="mut small">${b.days.map(d=>DN[d]).join(' ')} · ${esc(b.start)}–${esc(b.end)} (${b.min} min${b.estimada?', estimado':', según tus últimas sesiones'})</div></div>`).join('')}
+  <div class="why" style="font-size:13px">Si ya habías traído estos bloques y los ajustaste a mano, al traerlos de nuevo se reemplazan. Los que cargaste vos a mano no se tocan.</div>
+  <div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="ecoapply">Traer bloques</button></div>`;
+}
+function anchorBlock(pid){
+  const leaf=db.tasks.filter(t=>t.projectId===pid&&!Core.hasChildren(db,t)),ev=Core.ecoEventos(ecoRead,todayISO());
+  const pre=leaf.find(t=>/d[ií]a de la (carrera|prueba)|evento|largada|briefing/i.test(t.name))||leaf[leaf.length-1];
+  return `<div class="fld">Fijar una fecha clave</div><div class="mut small">Elegí una tarea y la fecha en que tiene que pasar: calculo desde cuándo hay que empezar el proyecto.</div>
+  <label class="fld">Tarea<select id="an-task">${leaf.map(t=>`<option value="${t.id}" ${pre&&pre.id===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}</select></label>
+  ${ev.length?`<div class="mut small">Eventos de Mi plan:</div><div class="rw" style="flex-wrap:wrap;gap:6px">${ev.map(e=>`<button class="chip" data-act="anevent" data-d="${esc(e.fecha)}">🏁 ${esc(e.nombre)} · ${esc(e.fecha.split('-').reverse().join('/'))}</button>`).join('')}</div>`:''}
+  <div class="two"><label class="fld">Fecha<input id="an-date" type="date"></label><label class="fld">Hora<input id="an-time" type="time" value="08:00"></label></div>
+  <button class="btn blk" data-act="doanchor" data-id="${pid}">Calcular el inicio desde esa fecha</button>`;
 }
 
 function viewBandeja(){
@@ -1212,6 +1282,7 @@ function sheetHTML(){
   else if(['newlist','listset','liitem'].includes(s.type))inner=sheetList(s);
   else if(s.type==='res')inner=sheetRes(s);
   else if(s.type==='blk')inner=sheetBlk(s);
+  else if(s.type==='eco')inner=sheetEco(s);
   else if(s.type==='capture')inner=`<h2>Anotar</h2><form data-form="capsheet"><label class="fld">Lo que tengas en la cabeza<input id="capsheet-in" data-focus autocomplete="off" placeholder="Escribí y Enter"></label></form><div class="mut small" id="capcount">${s.n?`Anotadas: ${s.n}`:'Se guarda en la Bandeja. Ordenás después.'}</div><button class="btn blk" data-act="closesheet">Listo</button>`;
   else if(s.type==='newproj')inner=`<h2>Nuevo proyecto</h2><label class="fld">Nombre<input id="np-name" data-focus placeholder="Ej.: Reforma del baño"></label>
     <label class="fld">Plantilla<select id="np-tpl">${Object.entries(Core.TEMPLATES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join('')}</select></label>
@@ -1225,6 +1296,7 @@ function sheetHTML(){
     <div class="two"><label class="fld">Moneda<select id="ps-cur">${['ARS','USD','EUR','BRL','CLP','UYU'].map(c=>`<option ${p.currency===c?'selected':''}>${c}</option>`).join('')}</select></label>
     <label class="fld">Cambio a ${esc(db.meta.currency)}<input id="ps-fx" type="number" step="any" min="0" value="${p.fx||1}"></label></div>
     <label class="fld">Fecha del cambio<input id="ps-fxd" type="date" value="${dateVal(p.fxDate)}"></label>
+    ${anchorBlock(p.id)}
     <div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="saveproj" data-id="${p.id}">Guardar</button></div>
     <div class="rw"><button class="btn sm" data-act="exportproj" data-id="${p.id}">Exportar proyecto (.json)</button><button class="btn sm dng" data-act="delproj" data-id="${p.id}">Eliminar</button></div>`;
   }else if(s.type==='phase')inner=`<h2>Nueva fase</h2><label class="fld">Nombre<input id="ph-name" data-focus placeholder="Ej.: Compras"></label><div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="savephase">Crear</button></div>`;
@@ -1365,7 +1437,7 @@ function act(a,d,el){
     case 'createproj':{
       const L=$('#layer'),key=L.querySelector('#np-tpl').value,name=L.querySelector('#np-name').value.trim();
       const start=parseDT(L.querySelector('#np-date').value,L.querySelector('#np-time').value)||Core.defaultStart();
-      const p=Core.makeProject(db,key,name,start,Date.now());if(key==='ironman'){['ironman_semana','ironman_natacion','ironman_t1','ironman_t2'].forEach(k=>Core.newList(db,Core.LIST_TEMPLATES[k].label.replace('Ironman: ',''),p.id,k,Date.now()));}S.pid=p.id;S.sheet=null;S.tab='proyectos';save();render();break;
+      const p=Core.makeProject(db,key,name,start,Date.now());if(key==='ironman'){const ev=Core.ecoEventos(ecoRead,todayISO())[0],dt=db.tasks.find(t=>t.projectId===p.id&&/d[ií]a de la carrera/i.test(t.name));if(ev&&dt){const tg=parseDT(ev.fecha,'07:00');if(tg){Core.anchorProject(db,p.id,dt.id,tg);p.name=name||ev.nombre;toast('Armé el proyecto hacia «'+ev.nombre+'» ('+ev.fecha.split('-').reverse().join('/')+').');}}['ironman_semana','ironman_natacion','ironman_t1','ironman_t2'].forEach(k=>Core.newList(db,Core.LIST_TEMPLATES[k].label.replace('Ironman: ',''),p.id,k,Date.now()));}S.pid=p.id;S.sheet=null;S.tab='proyectos';save();render();break;
     }
     case 'openproj':S.pid=d.id;S.view='lista';S.listId=null;S.calDay=null;render();window.scrollTo(0,0);break;
     case 'backproj':S.pid=null;S.view='lista';S.listId=null;render();break;
@@ -1406,6 +1478,15 @@ function act(a,d,el){
     case 'dinbox':{const x=decOf(S.dec),r=Core.ahpSolve(x);if(addInbox('Hacer: '+x.options[r.order[0]]+' ('+x.name+')')){toast('Anotado en la Bandeja.');}break;}
     case 'ddel':{const x=decOf(d.id);S.sheet={type:'confirm',title:'¿Eliminar decisión?',text:`«${x.name}» se borra con todas sus comparaciones.`,go:'dodeldec',id:d.id,ok:'Eliminar'};drawLayer();break;}
     case 'dodeldec':db.decisions=db.decisions.filter(y=>y.id!==d.id);S.dec=null;S.sheet=null;save();render();break;
+    case 'ecoopen':S.sheet={type:'eco'};drawLayer();break;
+    case 'ecoapply':{const n=Core.ecoAplicarBloques(db,Core.ecoBloques(ecoRead,todayISO()));S.sheet=null;save();render();toast(n?`Traje ${n} bloque${n===1?'':'s'} protegido${n===1?'':'s'}.`:'No había nada para traer.');break;}
+    case 'anevent':{const e=$('#an-date');if(e)e.value=d.d;break;}
+    case 'doanchor':{
+      const L=$('#layer'),tid=L.querySelector('#an-task').value,dv=L.querySelector('#an-date').value,tv=L.querySelector('#an-time').value||'08:00';
+      const target=parseDT(dv,tv);if(!target){toast('Poné la fecha.');break;}
+      const r=Core.anchorProject(db,d.id,tid,target);if(!r){toast('No pude calcular esa tarea.');break;}
+      S.sheet=null;save();render();
+      toast(r.newStart<Date.now()?`Para llegar a esa fecha tendrías que haber empezado el ${fmtDate(r.newStart,false)}. Revisá los plazos.`:`Empieza el ${fmtDate(r.newStart,false)}.`);break;}
     case 'availopen':S.avail=true;render();window.scrollTo(0,0);break;
     case 'availback':S.avail=false;render();break;
     case 'addblk':S.sheet={type:'blk',draft:{id:Core.uid(),label:'',kind:'busy',days:[1,2,3,4,5],start:'08:00',end:'12:00'}};drawLayer();break;
