@@ -321,6 +321,20 @@ function buildImport(db,parsed,opt){
   });
   return {pid,count:made.length,links:parsed.links,loose:pid?looseEnds(db,pid):[]};
 }
+/* ---------- listas de chequeo ---------- */
+const LIST_TEMPLATES={
+  vacia:{label:'Vacía',items:[]},
+  viaje:{label:'Viaje',items:['Documentos y pasajes','Reservas (guardadas en el teléfono)','Tarjetas y algo de efectivo','Cargador y cable','Batería externa','Medicamentos','Ropa de abrigo','Calzado cómodo','Neceser','Avisar y dejar la casa lista']},
+  evento:{label:'Evento o carrera',items:['Inscripciones confirmadas','Listado de participantes','Dorsales y alfileres','Cronometraje probado','Vallas y cintas de señalización','Botiquín y ambulancia avisada','Agua e hidratación','Premios','Megáfono y parlantes','Permisos y avisos','Voluntarios confirmados']},
+  kayak:{label:'Salida de kayak',items:['Chaleco salvavidas','Pollera','Ropa térmica o neoprene','Remo y remo de repuesto','Bomba de achique','Celular o radio en bolsa estanca','Silbato','Agua y comida','Ropa seca de recambio','Avisar la ruta y la hora de regreso']}
+};
+function newList(db,name,pid,tpl,now){
+  db.lists=db.lists||[];const T=LIST_TEMPLATES[tpl]||LIST_TEMPLATES.vacia;
+  const l={id:uid(),name:name||T.label,projectId:pid||null,items:T.items.map(t=>({id:uid(),text:t,done:false})),createdAt:now||Date.now()};
+  db.lists.push(l);return l;
+}
+function listProgress(l){const t=l.items.length,d=l.items.filter(i=>i.done).length;return {total:t,done:d,pct:t?Math.round(d/t*100):0};}
+
 /* ---------- AHP (proceso analítico jerárquico) ---------- */
 const AHP_RI=[0,0,0.58,0.9,1.12,1.24,1.32,1.41,1.45,1.49];
 function ahpPairs(n){const r=[];for(let i=0;i<n;i++)for(let j=i+1;j<n;j++)r.push([i,j]);return r;}
@@ -497,7 +511,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -505,7 +519,7 @@ return {ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,
 (function(){
 'use strict';
 let db=null;
-const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,dec:null};
+const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,dec:null,listId:null,listsAll:false,showDone:false};
 let installEv=null,persisted=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEv=e;if(S.tab==='mas'&&!S.sheet)render();});
 window.addEventListener('appinstalled',()=>{installEv=null;toast('Instalada.');if(S.tab==='mas')render();});
@@ -615,7 +629,9 @@ function viewHoy(){
 }
 
 function viewProyectos(){
+  if(S.listId&&listOf(S.listId))return viewList(listOf(S.listId));
   if(S.pid&&projOf(S.pid))return viewProyecto(S.pid);
+  if(S.listsAll)return viewListas(null);
   if(S.calAll)return viewCalGlobal();
   let h=`<header class="hd"><h1>Proyectos</h1><p class="mut">${db.projects.length?'Tocá uno para ver sus tareas.':'Todavía no hay ninguno.'}</p></header>`;
   db.projects.forEach(p=>{
@@ -625,6 +641,7 @@ function viewProyectos(){
   });
   h+=`<div class="rw" style="margin-top:6px"><button class="btn pri" style="font-size:16px" data-act="newproj">Nuevo proyecto</button><button class="btn" data-act="goimport">Importar XML</button></div>`;
   if(db.projects.length)h+=`<button class="btn" style="width:100%;margin-top:8px" data-act="calall">Calendario de todos los proyectos</button>`;
+  h+=`<button class="btn" style="width:100%;margin-top:8px" data-act="listsall">Listas de chequeo${(db.lists||[]).length?' ('+db.lists.length+')':''}</button>`;
   return h;
 }
 
@@ -656,7 +673,7 @@ function viewProyecto(pid){
   let h=`<div class="hdr"><button class="back" data-act="backproj" aria-label="Volver a proyectos">${svg('back',24,2.2)}</button><h1>${esc(p.name)}</h1></div>
   <div class="mut small" style="padding:0 0 8px">${pr.pct} % · faltan ${esc(fmtDur(pr.remainingMin))}${sc.count?' · termina '+esc(fmtDate(sc.finish,sc.fine)):''}${p.currency&&p.currency!==db.meta.currency?' · '+esc(p.currency):''}</div>
   <div class="bar" style="margin-bottom:12px"><i style="width:${pr.pct}%"></i></div>
-  <div class="chips">${[['lista','Lista'],['gantt','Gantt'],['pert','PERT'],['cal','Calendario'],['rec','Recursos'],['cost','Costos']].map(v=>`<button class="chip ${S.view===v[0]?'on':''}" data-act="view" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>
+  <div class="chips">${[['lista','Lista'],['gantt','Gantt'],['pert','PERT'],['cal','Calendario'],['rec','Recursos'],['cost','Costos'],['listas','Listas']].map(v=>`<button class="chip ${S.view===v[0]?'on':''}" data-act="view" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>
   <div class="rw" style="margin-bottom:10px"><button class="btn sm" data-act="addtask">+ Tarea</button><button class="btn sm" data-act="addphase">+ Fase</button><button class="btn sm" data-act="share" data-id="${pid}">Compartir</button><button class="btn sm" data-act="projset" data-id="${pid}">Ajustes</button></div>`;
   if(sc.cyclic)h+='<div class="warn" style="margin-bottom:8px">Hay dependencias circulares: revisá las predecesoras.</div>';
   const loose=Core.looseEnds(db,pid);
@@ -666,6 +683,7 @@ function viewProyecto(pid){
   if(S.view==='cal')return h+viewCal(false);
   if(S.view==='rec')return h+viewRecursos(pid);
   if(S.view==='cost')return h+viewCostos(pid);
+  if(S.view==='listas')return h+viewListas(pid);
   const rows=treeRows(pid,null,0,sc);
   h+=rows||'<div class="empty"><p class="mut" style="margin:0">Este proyecto no tiene tareas. Agregá la primera con «+ Tarea».</p></div>';
   return h;
@@ -863,7 +881,7 @@ function viewCostos(pid){
   const pct=c.plan?Math.min(100,Math.round(c.spent/c.plan*100)):0;
   let h=`<div class="card" style="gap:10px"><div class="lab">Presupuesto estimado</div><div class="big-t">${m(c.plan)}</div><div class="bar"><i style="width:${pct}%"></i></div><div class="mut small">Gastado ${m(c.spent)} · falta ${m(c.pending)}</div>${cur!==base?`<div class="mut small">En ${esc(base)} (cambio ${esc(String(c.fx))}${p.fxDate?' al '+esc(fmtDate(p.fxDate)):''}): ${esc(Core.money(c.planBase,base))}</div>`:''}</div>`;
   const st=Core.stockInfo(db,pid).filter(x=>x.missing>0);
-  if(st.length)h+=`<div class="warn" style="margin-bottom:10px"><b>Para comprar:</b> ${st.map(x=>`${esc(x.r.name)} (${esc(bestUnit(x.missing,x.r.unit))})${x.r.price?' ≈ '+esc(Core.money(x.missing*x.r.price,cur)):''}`).join(', ')}.</div>`;
+  if(st.length)h+=`<div class="warn" style="margin-bottom:10px"><b>Para comprar:</b> ${st.map(x=>`${esc(x.r.name)} (${esc(bestUnit(x.missing,x.r.unit))})${x.r.price?' ≈ '+esc(Core.money(x.missing*x.r.price,cur)):''}`).join(', ')}.<div style="margin-top:8px"><button class="btn sm" data-act="shoplist" data-pid="${pid}">Armar lista de compras</button></div></div>`;
   h+=`<div class="sec">Por tarea</div>`;
   c.byTask.sort((a,b)=>b.plan-a.plan).forEach(x=>{
     h+=`<button class="item" style="width:100%;text-align:left;cursor:pointer;padding-left:12px" data-act="edit" data-id="${x.t.id}"><span class="tx" style="flex:1"><div class="nm">${esc(x.t.name)}</div><div class="mut small">${x.parts.map(q=>esc(q.n)+' '+esc(Core.money(q.v,cur))).join(' · ')}</div></span><b style="font-size:15px">${m(x.t.status==='done'?x.real:x.plan)}</b></button>`;
@@ -964,6 +982,51 @@ function capCard(ds){
   const cf=Core.blockConflicts(db).filter(x=>x.ds===ds);
   cf.forEach(x=>{h+=`<div class="warn">«${esc(x.t.name)}» pisa tu ${x.b.kind==='protected'?'bloque protegido':'bloque ocupado'} «${esc(x.b.label||'')}».</div>`;});
   return h+'</div>';
+}
+
+/* ---------- Listas de chequeo (vistas) ---------- */
+const listOf=id=>(db.lists||[]).find(l=>l.id===id);
+function viewListas(pid){
+  const all=(db.lists||[]).filter(l=>pid?l.projectId===pid:true);
+  let h='';
+  if(!pid)h+=`<div class="hdr"><button class="back" data-act="listsback" aria-label="Volver a proyectos">${svg('back',24,2.2)}</button><h1>Listas de chequeo</h1></div><p class="mut" style="margin:0 4px 10px">Para no olvidarte nada: compras, viajes, eventos. Solo se tilda.</p>`;
+  h+=`<div class="rw" style="margin-bottom:10px"><button class="btn pri" style="font-size:16px" data-act="newlist" data-pid="${pid||''}">+ Nueva lista</button></div>`;
+  if(!all.length)return h+emptyView('Todavía no hay listas. Podés empezar de cero o con un modelo (viaje, evento, salida de kayak).');
+  all.slice().reverse().forEach(l=>{
+    const pr=Core.listProgress(l),p=l.projectId&&projOf(l.projectId);
+    h+=`<button class="card" style="text-align:left;width:100%;gap:6px;margin-bottom:8px;cursor:pointer" data-act="openlist" data-id="${l.id}"><div class="big-t" style="font-size:18px;line-height:24px">${esc(l.name)}</div><div class="bar"><i style="width:${pr.pct}%"></i></div><div class="mut small">${pr.done} de ${pr.total}${p&&!pid?' · '+esc(p.name):''}${pr.total&&pr.done===pr.total?' · todo listo':''}</div></button>`;
+  });
+  return h;
+}
+function viewList(l){
+  const pr=Core.listProgress(l),open=l.items.filter(i=>!i.done),done=l.items.filter(i=>i.done),p=l.projectId&&projOf(l.projectId);
+  const row=i=>`<div class="item ${i.done?'done':''}" style="min-height:56px"><button class="ck ${i.done?'on':''}" data-act="litog" data-id="${i.id}" aria-label="${i.done?'Desmarcar':'Marcar'}: ${esc(i.text)}"><i>${i.done?svg('chk',14,3):''}</i></button><button class="tx" data-act="liedit" data-id="${i.id}"><div class="nm">${esc(i.text)}</div></button></div>`;
+  let h=`<div class="hdr"><button class="back" data-act="listback" aria-label="Volver">${svg('back',24,2.2)}</button><h1>${esc(l.name)}</h1></div>
+  <div class="mut small" style="padding:0 0 6px">${pr.done} de ${pr.total}${p?' · '+esc(p.name):''}</div><div class="bar" style="margin-bottom:12px"><i style="width:${pr.pct}%"></i></div>
+  <form data-form="listadd" class="rw" style="margin-bottom:10px"><input id="li-in" aria-label="Agregar a la lista" autocomplete="off" placeholder="Agregá algo y Enter" style="flex:1;min-height:48px;border:1px solid var(--line2);border-radius:12px;padding:0 12px;font-size:16px;background:#fff"><button class="btn" style="flex:none" aria-label="Agregar">${svg('plus',22,2.2)}</button></form>`;
+  if(pr.total&&!open.length)h+=`<div class="why" style="margin-bottom:10px">Todo listo.</div>`;
+  if(!l.items.length)h+=emptyView('La lista está vacía. Escribí arriba lo primero que se te ocurra.');
+  h+=open.map(row).join('');
+  if(done.length)h+=`<button class="btn sm" style="margin:6px 0" data-act="lishowdone">${S.showDone?'Ocultar':'Ver'} las hechas (${done.length})</button>`+(S.showDone?done.map(row).join(''):'');
+  h+=`<div class="rw" style="margin-top:12px;flex-wrap:wrap"><button class="btn sm" data-act="lishare">Compartir</button><button class="btn sm" data-act="lireset">Desmarcar todo</button><button class="btn sm" data-act="lisettings">Ajustes de la lista</button></div>`;
+  return h;
+}
+function sheetList(s){
+  if(s.type==='newlist')return `<h2>Nueva lista</h2><label class="fld">Nombre<input id="nl-name" data-focus placeholder="Ej.: Compras de la reforma"></label>
+  <label class="fld">Empezar con<select id="nl-tpl">${Object.entries(Core.LIST_TEMPLATES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join('')}</select></label>
+  <label class="fld">Proyecto (opcional)<select id="nl-pid"><option value="">Ninguno</option>${db.projects.map(p=>`<option value="${p.id}" ${s.pid===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+  <div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="createlist">Crear</button></div>`;
+  if(s.type==='listset'){const l=listOf(s.id);return `<h2>Ajustes de la lista</h2><label class="fld">Nombre<input id="ls-name" data-focus value="${esc(l.name)}"></label>
+  <label class="fld">Proyecto<select id="ls-pid"><option value="">Ninguno</option>${db.projects.map(p=>`<option value="${p.id}" ${l.projectId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+  <div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="savelistset">Guardar</button></div>
+  <div class="rw"><button class="btn sm" data-act="dupelist">Duplicar</button><button class="btn sm" data-act="clearDone">Quitar las hechas</button><button class="btn sm dng" data-act="dellist">Eliminar</button></div>`;}
+  if(s.type==='liitem'){const l=listOf(S.listId),i=l.items.find(x=>x.id===s.id);return `<h2>Editar</h2><label class="fld">Texto<input id="it-text" data-focus value="${esc(i.text)}"></label><div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="saveitem" data-id="${i.id}">Guardar</button></div><button class="btn sm dng" data-act="delitem" data-id="${i.id}">Quitar de la lista</button>`;}
+  return '';
+}
+async function shareList(l){
+  const txt=`*${l.name}*\n`+l.items.map(i=>`${i.done?'✅':'⬜'} ${i.text}`).join('\n');
+  try{if(navigator.share){await navigator.share({text:txt});return;}}catch(e){if(e&&e.name==='AbortError')return;}
+  try{await navigator.clipboard.writeText(txt);toast('Lista copiada.');}catch(e){download(l.name+'.txt',txt,'text/plain');}
 }
 
 function viewBandeja(){
@@ -1132,6 +1195,7 @@ function celebrateHTML(){
 function sheetHTML(){
   const s=S.sheet;let inner='';
   if(s.type==='task')inner=sheetTask(s);
+  else if(['newlist','listset','liitem'].includes(s.type))inner=sheetList(s);
   else if(s.type==='res')inner=sheetRes(s);
   else if(s.type==='blk')inner=sheetBlk(s);
   else if(s.type==='capture')inner=`<h2>Anotar</h2><form data-form="capsheet"><label class="fld">Lo que tengas en la cabeza<input id="capsheet-in" data-focus autocomplete="off" placeholder="Escribí y Enter"></label></form><div class="mut small" id="capcount">${s.n?`Anotadas: ${s.n}`:'Se guarda en la Bandeja. Ordenás después.'}</div><button class="btn blk" data-act="closesheet">Listo</button>`;
@@ -1271,7 +1335,7 @@ function parseSteps(text){
 
 function act(a,d,el){
   switch(a){
-    case 'tab':S.tab=d.tab;S.avail=false;S.dec=null;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
+    case 'tab':S.tab=d.tab;S.avail=false;S.dec=null;S.listId=null;S.listsAll=false;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
     case 'toggle':{const t=taskOf(d.id);if(!t)break;if(t.status==='done'){Core.reopen(db,d.id);save();render();}else{finishTask(d.id);}break;}
     case 'other':S.offset++;render();break;
     case 'start':startTimer(d.id);break;
@@ -1289,9 +1353,34 @@ function act(a,d,el){
       const start=parseDT(L.querySelector('#np-date').value,L.querySelector('#np-time').value)||Core.defaultStart();
       const p=Core.makeProject(db,key,name,start,Date.now());S.pid=p.id;S.sheet=null;S.tab='proyectos';save();render();break;
     }
-    case 'openproj':S.pid=d.id;S.view='lista';S.calDay=null;render();window.scrollTo(0,0);break;
-    case 'backproj':S.pid=null;S.view='lista';render();break;
+    case 'openproj':S.pid=d.id;S.view='lista';S.listId=null;S.calDay=null;render();window.scrollTo(0,0);break;
+    case 'backproj':S.pid=null;S.view='lista';S.listId=null;render();break;
     case 'view':S.view=d.v;render();break;
+    case 'listsall':S.listsAll=true;S.tab='proyectos';S.pid=null;render();window.scrollTo(0,0);break;
+    case 'listsback':S.listsAll=false;render();break;
+    case 'listback':S.listId=null;S.showDone=false;render();break;
+    case 'openlist':S.listId=d.id;S.showDone=false;render();window.scrollTo(0,0);break;
+    case 'newlist':S.sheet={type:'newlist',pid:d.pid||''};drawLayer();break;
+    case 'createlist':{const L=$('#layer'),l=Core.newList(db,L.querySelector('#nl-name').value.trim(),L.querySelector('#nl-pid').value||null,L.querySelector('#nl-tpl').value,Date.now());S.sheet=null;S.listId=l.id;S.tab='proyectos';save();render();window.scrollTo(0,0);break;}
+    case 'litog':{const l=listOf(S.listId),i=l&&l.items.find(x=>x.id===d.id);if(i){i.done=!i.done;save();render();}break;}
+    case 'lishowdone':S.showDone=!S.showDone;render();break;
+    case 'liedit':S.sheet={type:'liitem',id:d.id};drawLayer();break;
+    case 'saveitem':{const l=listOf(S.listId),i=l.items.find(x=>x.id===d.id),v=$('#it-text').value.trim();if(v)i.text=v;S.sheet=null;save();render();break;}
+    case 'delitem':{const l=listOf(S.listId);l.items=l.items.filter(x=>x.id!==d.id);S.sheet=null;save();render();break;}
+    case 'lireset':{const l=listOf(S.listId);l.items.forEach(i=>i.done=false);save();render();toast('Lista lista para usar de nuevo.');break;}
+    case 'lishare':shareList(listOf(S.listId));break;
+    case 'lisettings':S.sheet={type:'listset',id:S.listId};drawLayer();break;
+    case 'savelistset':{const l=listOf(S.listId),L=$('#layer');l.name=L.querySelector('#ls-name').value.trim()||l.name;l.projectId=L.querySelector('#ls-pid').value||null;S.sheet=null;save();render();break;}
+    case 'clearDone':{const l=listOf(S.listId);l.items=l.items.filter(i=>!i.done);S.sheet=null;save();render();break;}
+    case 'dupelist':{const l=listOf(S.listId),c=Core.newList(db,l.name+' (copia)',l.projectId,'vacia',Date.now());c.items=l.items.map(i=>({id:Core.uid(),text:i.text,done:false}));S.sheet=null;S.listId=c.id;save();render();toast('Duplicada, sin tildes.');break;}
+    case 'dellist':S.sheet={type:'confirm',title:'¿Eliminar lista?',text:'La lista se borra con todo lo que tiene.',go:'dodellist',id:S.listId,ok:'Eliminar'};drawLayer();break;
+    case 'dodellist':db.lists=db.lists.filter(l=>l.id!==d.id);S.listId=null;S.sheet=null;save();render();break;
+    case 'shoplist':{
+      const p=projOf(d.pid),miss=Core.stockInfo(db,d.pid).filter(x=>x.missing>0);
+      let l=db.lists.find(x=>x.projectId===d.pid&&/^Compras/.test(x.name));
+      if(!l)l=Core.newList(db,'Compras: '+p.name,d.pid,'vacia',Date.now());
+      let n=0;miss.forEach(x=>{const tag=x.r.name+' — ';if(!l.items.some(i=>i.text.startsWith(tag)&&!i.done)){l.items.push({id:Core.uid(),text:tag+bestUnit(x.missing,x.r.unit),done:false});n++;}});
+      S.listId=l.id;save();render();toast(n?`Agregué ${n} a la lista de compras.`:'La lista ya tenía todo.');break;}
     case 'dnew':{const x={id:Core.uid(),name:'',options:[],criteria:[],critComp:{},optComp:{},stage:'name',idx:0,createdAt:Date.now()};db.decisions.push(x);S.dec=x.id;save();render();break;}
     case 'dopen':S.dec=d.id;render();window.scrollTo(0,0);break;
     case 'dexit':{const x=decOf(S.dec);if(x&&x.stage==='name'&&!x.name&&!x.options.length)db.decisions=db.decisions.filter(y=>y.id!==x.id);S.dec=null;save();render();break;}
@@ -1391,7 +1480,7 @@ function act(a,d,el){
       S.sheet=null;save();render();break;
     }
     case 'delproj':{const p=projOf(d.id);S.sheet={type:'confirm',title:'¿Eliminar proyecto?',text:`«${p.name}» y todas sus tareas se borran.`,go:'dodelproj',id:d.id,ok:'Eliminar'};drawLayer();break;}
-    case 'dodelproj':db.tasks=db.tasks.filter(t=>t.projectId!==d.id);db.projects=db.projects.filter(p=>p.id!==d.id);S.pid=null;S.sheet=null;save();render();break;
+    case 'dodelproj':(db.lists||[]).forEach(l=>{if(l.projectId===d.id)l.projectId=null;});db.tasks=db.tasks.filter(t=>t.projectId!==d.id);db.projects=db.projects.filter(p=>p.id!==d.id);S.pid=null;S.sheet=null;save();render();break;
     case 'share':shareProject(d.id);break;
     case 'exportproj':{
       const p=projOf(d.id),sub={v:1,projects:[p],tasks:db.tasks.filter(t=>t.projectId===d.id),meta:{currency:db.meta.currency}};
@@ -1412,7 +1501,7 @@ function act(a,d,el){
   }
 }
 function normalize(){
-  db.projects=db.projects||[];db.tasks=db.tasks||[];db.decisions=db.decisions||[];db.meta=Object.assign({name:'',currency:'ARS',timer:null},db.meta||{});
+  db.projects=db.projects||[];db.tasks=db.tasks||[];db.decisions=db.decisions||[];db.lists=db.lists||[];db.meta=Object.assign({name:'',currency:'ARS',timer:null},db.meta||{});
   db.tasks.forEach(t=>{t.preds=t.preds||[];if(t.parentId===undefined)t.parentId=null;});
 }
 
@@ -1425,6 +1514,10 @@ document.addEventListener('click',e=>{
 document.addEventListener('submit',e=>{
   const f=e.target.closest('[data-form]');if(!f)return;e.preventDefault();
   if(f.dataset.form==='capture'){const i=$('#capin');if(addInbox(i.value)){render();const n=$('#capin');if(n)n.focus();}}
+  else if(f.dataset.form==='listadd'){
+    const i=$('#li-in'),l=listOf(S.listId),v=i.value.trim();
+    if(l&&v){v.split(/\n|,\s*(?=[A-Za-zÁÉÍÓÚáéíóúñÑ])/).map(x=>x.trim()).filter(Boolean).forEach(x=>l.items.push({id:Core.uid(),text:x,done:false}));save();render();const n=$('#li-in');if(n)n.focus();}
+  }
   else if(f.dataset.form==='capsheet'){
     const i=$('#capsheet-in');if(addInbox(i.value)){
       S.sheet.n=(S.sheet.n||0)+1;
