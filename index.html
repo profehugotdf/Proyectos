@@ -644,7 +644,7 @@ return {WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo
 (function(){
 'use strict';
 let db=null;
-const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,dec:null,listId:null,listsAll:false,showDone:false,wiz:null};
+const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,link:{on:false,from:null},dec:null,listId:null,listsAll:false,showDone:false,wiz:null};
 let installEv=null,persisted=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEv=e;if(S.tab==='mas'&&!S.sheet)render();});
 window.addEventListener('appinstalled',()=>{installEv=null;toast('Instalada.');if(S.tab==='mas')render();});
@@ -913,10 +913,13 @@ function viewPert(pid,sc){
   leafs.forEach(t=>{
     const p=pos[t.id],s=sc.map[t.id],done=t.status==='done',crit=s&&s.critical&&!done;
     const fill=done?'#fff':urgFill(t.due||(s?s.es:Date.now()));
-    cards+=`<button data-act="edit" data-id="${t.id}" style="position:absolute;left:${X(p)}px;top:${Y(p)}px;width:${CW}px;height:${CH}px;box-sizing:border-box;padding:4px 8px;border-radius:10px;text-align:left;background:${fill};border:${crit?'3px solid #1D2327':done?'1.5px dashed #8A8378':'1px solid #B8B1A0'};color:${done?'#5B6166':'#1D2327'};display:flex;align-items:center;gap:6px;overflow:hidden">${t.starred?`<span style="flex:none">${svg('star',13,0)}</span>`:''}${done?`<span style="flex:none">${svg('chk',13,3)}</span>`:''}<span style="min-width:0"><b style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:16px;overflow-wrap:anywhere">${esc(t.name)}</b><span style="font-size:12px;line-height:16px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(fmtDur(t.durationMin))}${s?' · '+esc(fmtShort(s.es,sc.fine)):''}</span></span></button>`;
+    const lk=S.link&&S.link.on,sel=lk&&S.link.from===t.id;
+    cards+=`<button data-act="${lk?'plink':'edit'}" data-id="${t.id}" style="position:absolute;${sel?'outline:4px solid #0F766E;outline-offset:2px;':''}left:${X(p)}px;top:${Y(p)}px;width:${CW}px;height:${CH}px;box-sizing:border-box;padding:4px 8px;border-radius:10px;text-align:left;background:${fill};border:${crit?'3px solid #1D2327':done?'1.5px dashed #8A8378':'1px solid #B8B1A0'};color:${done?'#5B6166':'#1D2327'};display:flex;align-items:center;gap:6px;overflow:hidden">${t.starred?`<span style="flex:none">${svg('star',13,0)}</span>`:''}${done?`<span style="flex:none">${svg('chk',13,3)}</span>`:''}<span style="min-width:0"><b style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:16px;overflow-wrap:anywhere">${esc(t.name)}</b><span style="font-size:12px;line-height:16px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(fmtDur(t.durationMin))}${s?' · '+esc(fmtShort(s.es,sc.fine)):''}</span></span></button>`;
   });
-  return `<div style="overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:#fff"><div style="position:relative;width:${Wd}px;height:${Ht}px"><svg width="${Wd}" height="${Ht}" style="position:absolute;left:0;top:0" aria-hidden="true">${edges}</svg>${cards}</div></div>
-  <div class="mut small" style="margin-top:8px">Las flechas van de lo que hay que terminar a lo que viene después. Borde grueso: ruta crítica. Color: urgencia (rojo hoy, naranja 1–3 días, amarillo 4–7 días). Tocá una caja para editarla.</div>`;
+  const lkOn=S.link&&S.link.on,fromT=lkOn&&S.link.from?byId.get(S.link.from):null;
+  const bar=`<div class="rw" style="margin-bottom:8px"><button class="btn sm ${lkOn?'pri':''}" data-act="plinktoggle" aria-pressed="${!!lkOn}">${lkOn?'Terminar de enlazar':'Enlazar tareas'}</button></div>`+(lkOn?`<div class="why" style="margin-bottom:8px">${fromT?`Va primero: <b>${esc(fromT.name)}</b>. Ahora tocá la que viene <b>después</b>. Si ya estaban enlazadas, se desenlazan.`:'Tocá la tarea que va <b>primero</b>, y después la que viene después.'}</div>`:'');
+  return bar+`<div style="overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:#fff"><div style="position:relative;width:${Wd}px;height:${Ht}px"><svg width="${Wd}" height="${Ht}" style="position:absolute;left:0;top:0" aria-hidden="true">${edges}</svg>${cards}</div></div>
+  <div class="mut small" style="margin-top:8px">Las flechas van de lo que hay que terminar a lo que viene después. Borde grueso: ruta crítica. Color: urgencia (rojo hoy, naranja 1–3 días, amarillo 4–7 días). Tocá una caja para editarla, o usá «Enlazar tareas» para conectar dos.</div>`;
 }
 const PAL=['#0F766E','#B45309','#2563EB','#9333EA','#BE185D','#4D7C0F'];
 function calItems(all){
@@ -1552,7 +1555,7 @@ function parseSteps(text){
 
 function act(a,d,el){
   switch(a){
-    case 'tab':S.tab=d.tab;S.wiz=null;S.avail=false;S.dec=null;S.listId=null;S.listsAll=false;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
+    case 'tab':S.tab=d.tab;S.link={on:false,from:null};S.wiz=null;S.avail=false;S.dec=null;S.listId=null;S.listsAll=false;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
     case 'toggle':{const t=taskOf(d.id);if(!t)break;if(t.status==='done'){Core.reopen(db,d.id);save();render();}else{finishTask(d.id);}break;}
     case 'other':S.offset++;render();break;
     case 'start':startTimer(d.id);break;
@@ -1572,7 +1575,18 @@ function act(a,d,el){
     }
     case 'openproj':S.pid=d.id;S.view='lista';S.listId=null;S.calDay=null;render();window.scrollTo(0,0);break;
     case 'backproj':S.pid=null;S.view='lista';S.listId=null;render();break;
-    case 'view':S.view=d.v;render();break;
+    case 'view':S.view=d.v;S.link={on:false,from:null};render();break;
+    case 'plinktoggle':S.link={on:!S.link.on,from:null};render();break;
+    case 'plink':{
+      const id=d.id;
+      if(!S.link.from){S.link.from=id;render();break;}
+      if(S.link.from===id){S.link.from=null;render();break;}
+      const A=taskOf(S.link.from),B=taskOf(id);S.link.from=null;
+      if(!A||!B){render();break;}
+      const has=(B.preds||[]).some(q=>q.id===A.id);
+      if(has){B.preds=B.preds.filter(q=>q.id!==A.id);save();render();toast('Enlace quitado: «'+A.name+'» ya no va antes de «'+B.name+'».');break;}
+      if(Core.dependents(db,B.id).has(A.id)||(A.preds||[]).some(q=>q.id===B.id)){render();toast('Eso haría un círculo: «'+A.name+'» ya depende de «'+B.name+'».');break;}
+      B.preds=(B.preds||[]).concat([{id:A.id,type:'FS',lag:0}]);save();render();toast('«'+A.name+'» → «'+B.name+'»');break;}
     case 'listsall':S.listsAll=true;S.tab='proyectos';S.pid=null;render();window.scrollTo(0,0);break;
     case 'listsback':S.listsAll=false;render();break;
     case 'listback':S.listId=null;S.showDone=false;render();break;
