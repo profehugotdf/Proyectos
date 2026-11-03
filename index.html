@@ -235,6 +235,16 @@ triatlon:{label:'Organizar un triatlón',rows:[
 ['Protocolo','Pedir autorización a prefectura',1440,[3]],['Seguridad','Contratar seguro',1440,[2]],
 ['Seguridad','Armar plan de seguridad y rescate',1440,[3]],['Logística','Abrir inscripciones',1440,[2]],
 ['Logística','Armar cronometraje',1440,[3]],['Protocolo','Briefing y largada',120,[0,1,4,5,6,7,8]]]},
+ironman:{label:'Prepararme para un Ironman',rows:[
+['Inscripción y trámites','Elegir la carrera y confirmar la fecha',1440,[]],['Inscripción y trámites','Inscribirme y pagar el cupo',1440,[0]],
+['Inscripción y trámites','Chequeo médico y apto físico',4320,[1]],['Inscripción y trámites','Seguro y licencia federativa',1440,[1]],
+['Viaje','Reservar pasajes',1440,[1]],['Viaje','Reservar alojamiento cerca de la largada',1440,[1]],['Viaje','Resolver el traslado de la bici (caja o servicio)',2880,[4]],
+['Equipamiento','Service completo de la bici',4320,[1]],['Equipamiento','Neoprene y prueba en aguas abiertas',2880,[1]],
+['Equipamiento','Zapatillas y ropa: probar con kilómetros',2880,[1]],['Equipamiento','Plan de nutrición e hidratación probado en entrenamientos largos',20160,[1]],
+['Simulacros','Nadada larga en aguas abiertas',1440,[8]],['Simulacros','Tirada larga en bici',1440,[7]],
+['Simulacros','Bloque bici + carrera',1440,[12,9]],['Simulacros','Simulacro de transiciones T1 y T2',1440,[13,11]],
+['Semana de carrera','Viajar, retirar el kit y charla técnica',1440,[2,3,4,5,6,14,10]],['Semana de carrera','Revisar la bici y dejar las bolsas',1440,[15]],
+['Semana de carrera','Día de la carrera',1020,[16]],['Semana de carrera','Recuperar y hacer el balance',2880,[17]]]},
 reforma:{label:'Reforma de la casa',rows:[
 ['Planificación','Definir alcance de la reforma',1440,[]],['Planificación','Pedir presupuestos',2880,[0]],['Planificación','Elegir contratista (decisión)',1440,[1]],
 ['Planificación','Fijar presupuesto y plan de pagos',1440,[2]],['Obra','Demolición y retiro de escombros',2880,[3]],['Obra','Instalaciones (agua, gas, electricidad)',4320,[4]],
@@ -326,6 +336,10 @@ const LIST_TEMPLATES={
   vacia:{label:'Vacía',items:[]},
   viaje:{label:'Viaje',items:['Documentos y pasajes','Reservas (guardadas en el teléfono)','Tarjetas y algo de efectivo','Cargador y cable','Batería externa','Medicamentos','Ropa de abrigo','Calzado cómodo','Neceser','Avisar y dejar la casa lista']},
   evento:{label:'Evento o carrera',items:['Inscripciones confirmadas','Listado de participantes','Dorsales y alfileres','Cronometraje probado','Vallas y cintas de señalización','Botiquín y ambulancia avisada','Agua e hidratación','Premios','Megáfono y parlantes','Permisos y avisos','Voluntarios confirmados']},
+  ironman_semana:{label:'Ironman: semana de carrera',items:['DNI y documentos','Confirmación de inscripción','Kit retirado (dorsal, chip, gorro, pulsera)','Charla técnica hecha','Bici revisada (neumáticos, frenos, cambios, baterías)','Bidones y portabidones','Herramientas y cámara de repuesto','Nutrición de carrera (geles, sales, barras) contada','Ropa para todos los climas','Cena y desayuno probados','Dormir temprano los dos días anteriores','Mapa del circuito y horarios']},
+  ironman_natacion:{label:'Ironman: largada (natación)',items:['Neoprene y traje de triatlón','Antiparras (dos)','Gorro oficial','Chip de cronometraje','Anti-roces','Ropa de abrigo para esperar','Desayuno probado','Bolsa de ropa para después']},
+  ironman_t1:{label:'Ironman: bolsa T1 (a la bici)',items:['Casco','Zapatillas de bici','Medias','Anteojos','Cinto con número','Geles y sales','Bidones llenos','Protector solar','Toalla chica','Campera liviana por si llueve']},
+  ironman_t2:{label:'Ironman: bolsa T2 (a correr)',items:['Zapatillas de correr','Gorra o visera','Cinto con número','Geles','Medias de repuesto','Anti-roces','Protector solar']},
   kayak:{label:'Salida de kayak',items:['Chaleco salvavidas','Pollera','Ropa térmica o neoprene','Remo y remo de repuesto','Bomba de achique','Celular o radio en bolsa estanca','Silbato','Agua y comida','Ropa seca de recambio','Avisar la ruta y la hora de regreso']}
 };
 function newList(db,name,pid,tpl,now){
@@ -1351,7 +1365,7 @@ function act(a,d,el){
     case 'createproj':{
       const L=$('#layer'),key=L.querySelector('#np-tpl').value,name=L.querySelector('#np-name').value.trim();
       const start=parseDT(L.querySelector('#np-date').value,L.querySelector('#np-time').value)||Core.defaultStart();
-      const p=Core.makeProject(db,key,name,start,Date.now());S.pid=p.id;S.sheet=null;S.tab='proyectos';save();render();break;
+      const p=Core.makeProject(db,key,name,start,Date.now());if(key==='ironman'){['ironman_semana','ironman_natacion','ironman_t1','ironman_t2'].forEach(k=>Core.newList(db,Core.LIST_TEMPLATES[k].label.replace('Ironman: ',''),p.id,k,Date.now()));}S.pid=p.id;S.sheet=null;S.tab='proyectos';save();render();break;
     }
     case 'openproj':S.pid=d.id;S.view='lista';S.listId=null;S.calDay=null;render();window.scrollTo(0,0);break;
     case 'backproj':S.pid=null;S.view='lista';S.listId=null;render();break;
