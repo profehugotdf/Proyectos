@@ -321,6 +321,52 @@ function buildImport(db,parsed,opt){
   });
   return {pid,count:made.length,links:parsed.links,loose:pid?looseEnds(db,pid):[]};
 }
+/* ---------- AHP (proceso analítico jerárquico) ---------- */
+const AHP_RI=[0,0,0.58,0.9,1.12,1.24,1.32,1.41,1.45,1.49];
+function ahpPairs(n){const r=[];for(let i=0;i<n;i++)for(let j=i+1;j<n;j++)r.push([i,j]);return r;}
+/* comps["i,j"] = +k: i pesa k veces más que j; -k: j pesa k veces más que i; 1: igual */
+function ahpMatrix(n,comps){
+  const M=Array.from({length:n},()=>Array(n).fill(1));comps=comps||{};
+  ahpPairs(n).forEach(([i,j])=>{const v=comps[i+','+j];if(v){const k=Math.abs(v);if(v>0){M[i][j]=k;M[j][i]=1/k;}else{M[i][j]=1/k;M[j][i]=k;}}});
+  return M;
+}
+function ahpPriority(M){
+  const n=M.length,g=M.map(r=>Math.pow(r.reduce((a,b)=>a*b,1),1/n)),sum=g.reduce((a,b)=>a+b,0),w=g.map(x=>x/sum);
+  let lam=0;for(let i=0;i<n;i++){let t=0;for(let j=0;j<n;j++)t+=M[i][j]*w[j];lam+=t/w[i];}lam/=n;
+  const ci=n>2?(lam-n)/(n-1):0,ri=AHP_RI[Math.min(n,10)-1]||1.49,cr=n>2?Math.max(0,ci/ri):0;
+  return {w,cr,lam};
+}
+function ahpWorst(M,w){
+  let best=null,dev=1.0001;
+  ahpPairs(M.length).forEach(([i,j])=>{const r=M[i][j]/(w[i]/w[j]),d=Math.max(r,1/r);if(d>dev){dev=d;best=[i,j];}});
+  return best;
+}
+function ahpSolve(dec){
+  const m=dec.options.length,n=dec.criteria.length,CM=ahpMatrix(n,dec.critComp),C=ahpPriority(CM),local=[],lcr=[];
+  for(let c=0;c<n;c++){const M=ahpMatrix(m,(dec.optComp||{})[c]),P=ahpPriority(M);local.push(P.w);lcr.push({cr:P.cr,worst:ahpWorst(M,P.w)});}
+  const scores=dec.options.map((_,o)=>C.w.reduce((a,wc,c)=>a+wc*local[c][o],0));
+  return {cw:C.w,ccr:C.cr,cworst:ahpWorst(CM,C.w),local,lcr,scores,order:scores.map((_,i)=>i).sort((a,b)=>scores[b]-scores[a])};
+}
+/* lista plana de comparaciones a preguntar: primero criterios, después las opciones por cada criterio */
+function ahpSteps(dec){
+  const out=[];ahpPairs(dec.criteria.length).forEach(([i,j])=>out.push({kind:'crit',c:-1,i,j}));
+  dec.criteria.forEach((_,c)=>ahpPairs(dec.options.length).forEach(([i,j])=>out.push({kind:'opt',c,i,j})));
+  return out;
+}
+function ahpGet(dec,st){const bag=st.kind==='crit'?dec.critComp:((dec.optComp||{})[st.c]||{});return bag?bag[st.i+','+st.j]:undefined;}
+function ahpSet(dec,st,v){
+  if(st.kind==='crit'){dec.critComp=dec.critComp||{};dec.critComp[st.i+','+st.j]=v;}
+  else{dec.optComp=dec.optComp||{};dec.optComp[st.c]=dec.optComp[st.c]||{};dec.optComp[st.c][st.i+','+st.j]=v;}
+}
+function ahpMatrixDone(dec,st){
+  const n=st.kind==='crit'?dec.criteria.length:dec.options.length,bag=st.kind==='crit'?(dec.critComp||{}):((dec.optComp||{})[st.c]||{});
+  return ahpPairs(n).every(([i,j])=>bag[i+','+j]!=null);
+}
+function ahpMatrixCR(dec,st){
+  const n=st.kind==='crit'?dec.criteria.length:dec.options.length,bag=st.kind==='crit'?dec.critComp:((dec.optComp||{})[st.c]);
+  return ahpPriority(ahpMatrix(n,bag)).cr;
+}
+
 /* ---------- disponibilidad, tope diario y carga personal ---------- */
 const hm=t=>{const m=/^(\d{1,2}):(\d{2})$/.exec(t||'');return m?(+m[1])*60+(+m[2]):null;};
 function availOf(db){if(!db.meta.avail)db.meta.avail={dayStart:'07:00',dayEnd:'22:00',blocks:[],cap:{mode:'soft',byDay:{},exc:{}}};const a=db.meta.avail;a.blocks=a.blocks||[];a.cap=a.cap||{mode:'soft',byDay:{},exc:{}};a.cap.byDay=a.cap.byDay||{};a.cap.exc=a.cap.exc||{};return a;}
@@ -451,7 +497,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -459,7 +505,7 @@ return {availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meI
 (function(){
 'use strict';
 let db=null;
-const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false};
+const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,dec:null};
 let installEv=null,persisted=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEv=e;if(S.tab==='mas'&&!S.sheet)render();});
 window.addEventListener('appinstalled',()=>{installEv=null;toast('Instalada.');if(S.tab==='mas')render();});
@@ -941,8 +987,87 @@ function viewBandeja(){
   if(done.length)h+=`<div class="sec">Hechas (${done.length})</div>`+done.slice(-5).reverse().map(t=>`<div class="item done">${checkBtn(t)}<div class="tx"><div class="nm">${esc(t.name)}</div></div></div>`).join('');
   return h;
 }
+/* ---------- Decidir (AHP) ---------- */
+const decOf=id=>(db.decisions||[]).find(d=>d.id===id);
+const pctS=v=>Math.round(v*100)+' %';
+const lines=t=>String(t||'').split('\n').map(x=>x.trim()).filter(Boolean);
 function viewDecidir(){
-  return `<header class="hd"><h1>Decidir</h1><p class="mut">Comparaciones de a dos, con palabras.</p></header><div class="card"><div class="lab">Próxima etapa</div><div class="big-t" style="font-size:20px;line-height:26px">Asistente de decisiones (AHP)</div><p class="mut" style="margin:0">Va a guiarte con una pregunta por pantalla: opciones, criterios, comparaciones por pares, aviso de contradicciones y ranking final. Todavía no está en esta versión.</p></div>`;
+  if(S.dec&&decOf(S.dec))return viewDecWizard(decOf(S.dec));
+  const L=db.decisions||[];
+  let h=`<header class="hd"><h1>Decidir</h1><p class="mut">Comparaciones de a dos, con palabras. Yo hago las cuentas.</p></header><div class="rw" style="margin-bottom:10px"><button class="btn pri" style="font-size:16px" data-act="dnew">Nueva decisión</button></div>`;
+  if(!L.length)h+=emptyView('Para cuando no sabés qué elegir: el destino del viaje, qué guitarra comprar, a qué escuela dar prioridad. Te voy preguntando de a una cosa.');
+  L.slice().reverse().forEach(d=>{
+    const r=d.stage==='result'&&d.options.length>1&&d.criteria.length>1?Core.ahpSolve(d):null;
+    h+=`<button class="card" style="text-align:left;width:100%;gap:2px;margin-bottom:8px;cursor:pointer" data-act="dopen" data-id="${d.id}"><div class="big-t" style="font-size:18px;line-height:24px">${esc(d.name||'Sin nombre')}</div><div class="mut small">${r?'Resultado: '+esc(d.options[r.order[0]])+' ('+pctS(r.scores[r.order[0]])+')':'En curso · '+d.options.length+' opciones, '+d.criteria.length+' criterios'}</div></button>`;
+  });
+  return h;
+}
+function decShell(d,title,sub,body,foot,seg){
+  return `<div class="hdr"><button class="back" data-act="dexit" aria-label="Volver a decisiones">${svg('back',24,2.2)}</button><h1 style="font-size:22px">${esc(title)}</h1></div>${sub?`<p class="mut" style="margin:0 4px 8px">${sub}</p>`:''}${seg||''}${body}<div class="rw" style="margin-top:14px">${foot}</div>`;
+}
+function ansLabel(k,A,B,crit){
+  const w=crit?['pesa mucho más','pesa un poco más']:['es mucho mejor','es un poco mejor'];
+  return k===7?`${A} ${w[0]}`:k===3?`${A} ${w[1]}`:k===1?(crit?'Pesan igual':'Están parejos'):k===-3?`${B} ${w[1]}`:`${B} ${w[0]}`;
+}
+function viewDecWizard(d){
+  const st=d.stage;
+  if(st==='name')return decShell(d,'Nueva decisión','Paso 1 de 4','<label class="fld">¿Qué tenés que decidir?<input id="dc-name" data-focus value="'+esc(d.name)+'" placeholder="Ej.: Elegir destino del viaje"></label>','<button class="btn pri blk" style="font-size:16px" data-act="dnext">Siguiente</button>');
+  if(st==='opts')return decShell(d,d.name,'Paso 2 de 4 · Opciones','<label class="fld">¿Qué opciones tenés? Una por línea (entre 2 y 9)<textarea id="dc-text" data-focus style="min-height:150px" placeholder="Bariloche&#10;El Calafate&#10;Mendoza">'+esc(d.options.join('\n'))+'</textarea></label>','<button class="btn" data-act="dback">Atrás</button><button class="btn pri" style="font-size:16px;flex:2" data-act="dnext">Siguiente</button>');
+  if(st==='crit')return decShell(d,d.name,'Paso 3 de 4 · Criterios','<label class="fld">¿Qué te importa para elegir? Un criterio por línea (entre 2 y 7)<textarea id="dc-text" data-focus style="min-height:150px" placeholder="Costo&#10;Clima&#10;Tiempo&#10;Dificultad">'+esc(d.criteria.join('\n'))+'</textarea></label><div class="why" style="font-size:13px">Ejemplos: costo, tiempo, esfuerzo, riesgo, gusto. Después los comparás de a dos.</div>','<button class="btn" data-act="dback">Atrás</button><button class="btn pri" style="font-size:16px;flex:2" data-act="dnext">Empezar a comparar</button>');
+  if(st==='comp'){
+    const steps=Core.ahpSteps(d),k=Math.min(d.idx||0,steps.length-1),sp=steps[k],crit=sp.kind==='crit';
+    const items=crit?d.criteria:d.options,A=items[sp.i],B=items[sp.j],cur=Core.ahpGet(d,sp);
+    const n=items.length,status=Core.ahpMatrixDone(d,sp)&&n>2?(Core.ahpMatrixCR(d,sp)<=0.1?`<span style="display:flex;align-items:center;gap:5px;color:#0F766E;font-weight:700">${svg('chk',14,3)}Coherente</span>`:'<span style="color:#B45309;font-weight:700">Hay contradicciones</span>'):'';
+    const seg=`<div style="padding:0 4px 8px"><div style="display:flex;justify-content:space-between;font-size:14px;line-height:20px"><b>Comparación ${k+1} de ${steps.length}</b>${status}</div><div class="bar" style="margin-top:6px"><i style="width:${Math.round((k+1)/steps.length*100)}%"></i></div></div>`;
+    const card=(t,on)=>`<div style="flex:1;box-sizing:border-box;min-height:96px;padding:14px;background:${on?'#E3F1EE':'#fff'};border:${on?'2px solid #0F766E':'1px solid #CFC9BA'};border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:20px;line-height:24px;font-weight:700;overflow-wrap:anywhere">${esc(t)}</div>`;
+    const opts=[7,3,1,-3,-7].map(v=>`<button data-act="dans" data-v="${v}" aria-pressed="${cur===v}" style="min-height:48px;box-sizing:border-box;padding:6px 14px;display:flex;align-items:center;gap:12px;border:1px solid ${cur===v?'#0F766E':'#CFC9BA'};border-radius:12px;background:${cur===v?'#0F766E':'#fff'};color:${cur===v?'#fff':'#1D2327'};font-size:16px;text-align:left;${cur===v?'font-weight:700':''}"><span style="width:20px;height:20px;box-sizing:border-box;flex:none;border-radius:50%;border:2px solid ${cur===v?'#fff':'#8A8378'};${cur===v?'background:#fff;box-shadow:inset 0 0 0 4px #0F766E':''}"></span><span>${esc(ansLabel(v,A,B,crit))}</span></button>`).join('');
+    const body=`<div style="font-size:18px;line-height:24px;font-weight:700;padding:0 4px 8px">${crit?'¿Qué pesa más al elegir?':'¿Cuál es mejor en «'+esc(d.criteria[sp.c])+'»?'}</div><div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">${card(A,cur>1)}<span style="flex:none;width:28px;text-align:center;font-size:13px;font-weight:700;color:#5B6166">vs</span>${card(B,cur<0)}</div><div style="display:flex;flex-direction:column;gap:8px">${opts}</div><p class="mut small" style="margin:10px 4px 0">${cur!=null?`Eso vale ${Math.abs(cur)} en la escala de Saaty (de 1 a 9). `:''}Respondé con tu intuición: después se puede corregir.</p>`;
+    return decShell(d,d.name,'',body,'<button class="btn" data-act="dback">Atrás</button><button class="btn pri" style="font-size:16px;flex:2" data-act="dnext">'+(k+1===steps.length?'Ver resultado':'Siguiente')+'</button>',seg);
+  }
+  /* resultado */
+  const r=Core.ahpSolve(d),win=r.order[0],steps=Core.ahpSteps(d);
+  const top=d.criteria.map((c,ci)=>({c,v:r.cw[ci]*r.local[ci][win]})).sort((a,b)=>b.v-a.v)[0];
+  let h=`<div class="card" style="gap:4px"><div class="lab">Gana</div><div class="big-t">${esc(d.options[win])}</div><div class="mut">${pctS(r.scores[win])} de la preferencia${top?` · pesó sobre todo por «${esc(top.c)}»`:''}</div></div><div class="sec">Ranking</div>`;
+  r.order.forEach((o,ix)=>{h+=`<div style="padding:0 4px 10px"><div style="display:flex;justify-content:space-between;font-size:16px"><span ${ix===0?'style="font-weight:700"':''}>${ix+1}. ${esc(d.options[o])}</span><b>${pctS(r.scores[o])}</b></div><div class="bar" style="margin-top:4px"><i style="width:${Math.round(r.scores[o]*100)}%"></i></div></div>`;});
+  h+=`<div class="sec">Qué importó más</div><div class="card" style="gap:6px;padding:12px">${d.criteria.map((c,ci)=>({c,w:r.cw[ci]})).sort((a,b)=>b.w-a.w).map(x=>`<div style="display:flex;justify-content:space-between"><span>${esc(x.c)}</span><b>${pctS(x.w)}</b></div>`).join('')}</div>`;
+  const bad=[];
+  if(r.ccr>0.1)bad.push({txt:'En cómo comparaste los criterios',idx:steps.findIndex(x=>x.kind==='crit'),pair:r.cworst,items:d.criteria});
+  r.lcr.forEach((x,ci)=>{if(x.cr>0.1)bad.push({txt:'En «'+d.criteria[ci]+'»',idx:steps.findIndex(y=>y.kind==='opt'&&y.c===ci),pair:x.worst,items:d.options});});
+  if(bad.length)h+=`<div class="warn" style="margin-top:10px"><b>Hay respuestas que se contradicen.</b> Pasa cuando A gana a B, B gana a C y C gana a A. Conviene revisar:${bad.map(b=>`<div style="margin-top:6px">${esc(b.txt)}${b.pair?`: mirá «${esc(b.items[b.pair[0]])}» contra «${esc(b.items[b.pair[1]])}»`:''}<br><button class="btn sm" data-act="drev" data-i="${b.idx}">Revisar esa parte</button></div>`).join('')}</div>`;
+  else h+=`<div class="why" style="margin-top:10px">Tus respuestas son coherentes entre sí.</div>`;
+  h+=`<div class="rw" style="margin-top:12px;flex-wrap:wrap"><button class="btn" data-act="dshare">Compartir</button><button class="btn" data-act="dinbox">Anotar en Bandeja</button></div><div class="rw" style="margin-top:8px"><button class="btn" data-act="drev" data-i="0">Cambiar respuestas</button><button class="btn dng" data-act="ddel" data-id="${d.id}">Eliminar</button></div>`;
+  return `<div class="hdr"><button class="back" data-act="dexit" aria-label="Volver a decisiones">${svg('back',24,2.2)}</button><h1 style="font-size:22px">${esc(d.name)}</h1></div>`+h;
+}
+function decResetIfChanged(d,key,list){
+  const old=d[key]||[];
+  if(old.length!==list.length||old.some((x,i)=>x!==list[i])){
+    if(old.length!==list.length){d.critComp={};d.optComp={};}
+  }
+  d[key]=list;
+}
+function decNext(){
+  const d=decOf(S.dec),L=$('#app');
+  if(d.stage==='name'){const v=L.querySelector('#dc-name').value.trim();if(!v){toast('Poné de qué se trata.');return;}d.name=v;d.stage='opts';}
+  else if(d.stage==='opts'){const l=lines(L.querySelector('#dc-text').value);if(l.length<2){toast('Necesito al menos 2 opciones.');return;}if(l.length>9){toast('Hasta 9 opciones.');return;}decResetIfChanged(d,'options',l);d.stage='crit';}
+  else if(d.stage==='crit'){const l=lines(L.querySelector('#dc-text').value);if(l.length<2){toast('Necesito al menos 2 criterios.');return;}if(l.length>7){toast('Hasta 7 criterios.');return;}decResetIfChanged(d,'criteria',l);d.stage='comp';d.idx=0;}
+  else if(d.stage==='comp'){
+    const steps=Core.ahpSteps(d),sp=steps[d.idx];if(Core.ahpGet(d,sp)==null)Core.ahpSet(d,sp,1);
+    if(d.idx+1>=steps.length){d.stage='result';}else d.idx++;
+  }
+  save();render();window.scrollTo(0,0);
+}
+function decBack(){
+  const d=decOf(S.dec),L=$('#app');
+  if(d.stage==='opts')d.stage='name';else if(d.stage==='crit')d.stage='opts';
+  else if(d.stage==='comp'){if(d.idx>0)d.idx--;else d.stage='crit';}
+  else if(d.stage==='result'){d.stage='comp';d.idx=Core.ahpSteps(d).length-1;}
+  save();render();window.scrollTo(0,0);
+}
+async function decShare(d){
+  const r=Core.ahpSolve(d);
+  const txt=`*${d.name}*\n`+r.order.map((o,i)=>`${i+1}. ${d.options[o]} — ${pctS(r.scores[o])}`).join('\n')+'\nPesos: '+d.criteria.map((c,i)=>`${c} ${pctS(r.cw[i])}`).join(', ');
+  try{if(navigator.share){await navigator.share({text:txt});return;}}catch(e){if(e&&e.name==='AbortError')return;}
+  try{await navigator.clipboard.writeText(txt);toast('Resultado copiado.');}catch(e){download(d.name+'.txt',txt,'text/plain');}
 }
 function viewMas(){
   const standalone=!!(window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches);
@@ -1146,7 +1271,7 @@ function parseSteps(text){
 
 function act(a,d,el){
   switch(a){
-    case 'tab':S.tab=d.tab;S.avail=false;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
+    case 'tab':S.tab=d.tab;S.avail=false;S.dec=null;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
     case 'toggle':{const t=taskOf(d.id);if(!t)break;if(t.status==='done'){Core.reopen(db,d.id);save();render();}else{finishTask(d.id);}break;}
     case 'other':S.offset++;render();break;
     case 'start':startTimer(d.id);break;
@@ -1167,6 +1292,17 @@ function act(a,d,el){
     case 'openproj':S.pid=d.id;S.view='lista';S.calDay=null;render();window.scrollTo(0,0);break;
     case 'backproj':S.pid=null;S.view='lista';render();break;
     case 'view':S.view=d.v;render();break;
+    case 'dnew':{const x={id:Core.uid(),name:'',options:[],criteria:[],critComp:{},optComp:{},stage:'name',idx:0,createdAt:Date.now()};db.decisions.push(x);S.dec=x.id;save();render();break;}
+    case 'dopen':S.dec=d.id;render();window.scrollTo(0,0);break;
+    case 'dexit':{const x=decOf(S.dec);if(x&&x.stage==='name'&&!x.name&&!x.options.length)db.decisions=db.decisions.filter(y=>y.id!==x.id);S.dec=null;save();render();break;}
+    case 'dnext':decNext();break;
+    case 'dback':decBack();break;
+    case 'dans':{const x=decOf(S.dec),sp=Core.ahpSteps(x)[x.idx];Core.ahpSet(x,sp,+d.v);save();render();break;}
+    case 'drev':{const x=decOf(S.dec);x.stage='comp';x.idx=Math.max(0,+d.i||0);save();render();window.scrollTo(0,0);break;}
+    case 'dshare':decShare(decOf(S.dec));break;
+    case 'dinbox':{const x=decOf(S.dec),r=Core.ahpSolve(x);if(addInbox('Hacer: '+x.options[r.order[0]]+' ('+x.name+')')){toast('Anotado en la Bandeja.');}break;}
+    case 'ddel':{const x=decOf(d.id);S.sheet={type:'confirm',title:'¿Eliminar decisión?',text:`«${x.name}» se borra con todas sus comparaciones.`,go:'dodeldec',id:d.id,ok:'Eliminar'};drawLayer();break;}
+    case 'dodeldec':db.decisions=db.decisions.filter(y=>y.id!==d.id);S.dec=null;S.sheet=null;save();render();break;
     case 'availopen':S.avail=true;render();window.scrollTo(0,0);break;
     case 'availback':S.avail=false;render();break;
     case 'addblk':S.sheet={type:'blk',draft:{id:Core.uid(),label:'',kind:'busy',days:[1,2,3,4,5],start:'08:00',end:'12:00'}};drawLayer();break;
@@ -1276,7 +1412,7 @@ function act(a,d,el){
   }
 }
 function normalize(){
-  db.projects=db.projects||[];db.tasks=db.tasks||[];db.meta=Object.assign({name:'',currency:'ARS',timer:null},db.meta||{});
+  db.projects=db.projects||[];db.tasks=db.tasks||[];db.decisions=db.decisions||[];db.meta=Object.assign({name:'',currency:'ARS',timer:null},db.meta||{});
   db.tasks.forEach(t=>{t.preds=t.preds||[];if(t.parentId===undefined)t.parentId=null;});
 }
 
