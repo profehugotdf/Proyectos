@@ -131,7 +131,7 @@ function schedule(db,pid){
   if(cyclic)tasks.forEach(t=>{if(!order.includes(t.id))order.push(t.id);});
   const R={};
   order.forEach(id=>{
-    const t=byId.get(id),d=(t.durationMin||0)*MIN;let es=startMs;
+    const t=byId.get(id),d=(t.durationMin||0)*MIN;let es=startMs;if(t.startAt!=null&&t.startAt>es)es=t.startAt;
     (t.preds||[]).forEach(p=>{
       const a=R[p.id];if(!a)return;const lag=(p.lag||0)*MIN,ty=p.type||'FS';let c;
       if(ty==='FS')c=a.ef+lag;else if(ty==='SS')c=a.es+lag;else if(ty==='FF')c=a.ef+lag-d;else c=a.es+lag-d;
@@ -168,6 +168,7 @@ function rank(db,now){
   const byId=new Map(db.tasks.map(t=>[t.id,t])),sched={},out=[];
   for(const t of db.tasks){
     if(t.status==='done'||hasChildren(db,t))continue;
+    if(t.startAt!=null&&t.startAt>(()=>{const e=new Date(now);e.setHours(23,59,59,999);return e.getTime();})())continue;
     if(!(t.preds||[]).every(p=>{const x=byId.get(p.id);return !x||x.status==='done';}))continue;
     let sc=0,crit=false;
     const blocks=dependents(db,t.id).size;
@@ -787,6 +788,7 @@ function treeRows(pid,parentId,depth,sc){
       const badges=[];
       if(s&&s.critical&&t.status!=='done')badges.push('<span class="pill k">crítica</span>');
       if(t.starred)badges.push(`<span class="pill k" style="padding:1px 6px">${svg('star',11,0)}</span>`);
+      if(t.startAt!=null&&t.status!=='done')badges.push(`<span class="pill">empieza ${esc(fmtShort(t.startAt,true))}</span>`);
       if(t.due)badges.push(`<span class="pill ${dueClass(t.due)}">${esc(dueLabel(t.due))}</span>`);
       const np=(t.preds||[]).filter(p=>db.tasks.some(x=>x.id===p.id&&x.status!=='done')).length;
       if(np)badges.push(`<span class="pill">espera ${np}</span>`);
@@ -1003,6 +1005,7 @@ function calItems(all){
       if(t.due)items.push({t,pid,color,es:t.due,ef:t.due,kind:'due'});
     });
   });
+  if(all)db.tasks.filter(t=>!t.projectId&&t.startAt!=null&&t.status!=='done'&&!Core.hasChildren(db,t)).forEach(t=>items.push({t,pid:null,color:'#5B6166',es:t.startAt,ef:t.startAt+(t.durationMin||0)*60000,kind:'work',fine:true}));
   if(all)db.tasks.filter(t=>!t.projectId&&t.due&&!Core.hasChildren(db,t)).forEach(t=>items.push({t,pid:null,color:'#5B6166',es:t.due,ef:t.due,kind:'due'}));
   return items;
 }
@@ -1334,6 +1337,7 @@ function viewBandeja(){
     const badges=[];
     if(Core.sinVerbo(t.name))badges.push('<span class="pill o">¿Qué hay que hacer?</span>');
     if(Core.isQuick(t))badges.push('<span class="pill t">Rápida</span>');
+    if(t.startAt!=null)badges.push(`<span class="pill">empieza ${esc(fmtShort(t.startAt,true))}</span>`);
     if(t.due)badges.push(`<span class="pill ${dueClass(t.due)}">${esc(dueLabel(t.due))}</span>`);
     h+=`<div class="item">${checkBtn(t)}<button class="tx" data-act="inboxmenu" data-id="${t.id}"><div class="nm">${esc(t.name)}</div><div class="mut small">${esc(fmtDur(t.durationMin))}</div>${badges.length?`<div class="rw" style="gap:4px;margin-top:4px;flex-wrap:wrap">${badges.join('')}</div>`:''}</button></div>`;
   });
@@ -1544,6 +1548,8 @@ function sheetTask(s){
   <label class="fld">¿Cuántas veces o unidades? (la duración de arriba es de cada una)<input id="tk-qty" type="number" min="1" step="1" inputmode="numeric" value="${t.qty>1?t.qty:''}" placeholder="1"></label>
   <div class="why" id="tk-total" style="font-size:14px">${t.qty>1&&per!=null?'Total: '+esc(fmtDur(per*t.qty)):'Si es una sola, dejalo vacío. Ej.: 10 min × 15 pelotas = 2 h 30 min.'}</div>
   <div class="pred" id="tk-pu-wrap" style="${t.qty>1?'':'display:none'}"><label><input id="tk-pu" type="checkbox" ${t.perUnit!==false?'checked':''}> <span>Los materiales y costos de abajo son por cada unidad</span></label></div>
+  <div class="two"><label class="fld">Empieza (fecha)<input id="tk-sd" type="date" value="${dateVal(t.startAt)}"></label><label class="fld">Hora de inicio<input id="tk-st" type="time" value="${t.startAt!=null?timeVal(t.startAt):''}"></label></div>
+  <div class="mut small" style="margin:-4px 0 8px">Opcional. La tarea no va a empezar antes de ese momento (y no te la propongo en «Hoy» hasta ese día).</div>
   <div class="two"><label class="fld">Fecha límite<input id="tk-due" type="date" value="${dateVal(t.due)}"></label><label class="fld">Responsable<input id="tk-resp" value="${esc(t.resp||'')}"></label></div>
   ${phases.length?`<label class="fld">Fase<select id="tk-phase"><option value="">Sin fase</option>${phases.map(p=>`<option value="${p.id}" ${t.parentId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>`:''}
   <label class="pred"><label><input id="tk-star" type="checkbox" ${t.starred?'checked':''}> <span>Marcar como importante (máx. 3 por proyecto)</span></label></label>
@@ -1608,7 +1614,7 @@ function readTaskForm(){
   if(L.querySelector('#tk-cost')){t.cost=parseFloat(vv('#tk-cost'))||0;const rc=vv('#tk-real');t.realCost=rc===''?null:(parseFloat(rc)||0);}
   t.assign=assign;
   t.qty=qty;const pu=L.querySelector('#tk-pu');t.perUnit=qty?(pu?pu.checked:true):false;
-  t.name=name;t.durationMin=dur;t.due=parseDateVal(L.querySelector('#tk-due').value,true);t.resp=L.querySelector('#tk-resp').value.trim();
+  t.name=name;t.durationMin=dur;t.due=parseDateVal(L.querySelector('#tk-due').value,true);{const sd=L.querySelector('#tk-sd').value,st=L.querySelector('#tk-st').value;if(sd){const [y,m,d]=sd.split('-').map(Number),[hh,mm]=(st||'00:00').split(':').map(Number);t.startAt=new Date(y,m-1,d,hh||0,mm||0).getTime();}else t.startAt=null;}t.resp=L.querySelector('#tk-resp').value.trim();
   t.starred=star;t.notes=L.querySelector('#tk-notes').value;t.preds=preds;
   if(ph)t.parentId=ph.value||null;
   if(isNew)db.tasks.push(t);
