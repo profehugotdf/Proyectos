@@ -645,7 +645,7 @@ return {WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo
 (function(){
 'use strict';
 let db=null;
-const S={tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,link:{on:false,from:null},dec:null,listId:null,listsAll:false,showDone:false,wiz:null};
+const S={pv:null,tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,link:{on:false,from:null},dec:null,listId:null,listsAll:false,showDone:false,wiz:null};
 let installEv=null,persisted=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEv=e;if(S.tab==='mas'&&!S.sheet)render();});
 window.addEventListener('appinstalled',()=>{installEv=null;toast('Instalada.');if(S.tab==='mas')render();});
@@ -902,25 +902,96 @@ function viewPert(pid,sc){
     else{items.forEach((t,i)=>{pos[t.id]={col:i%C,row:row+Math.floor(i/C)};});row+=Math.ceil(items.length/C);}
   }
   const X=p=>12+p.col*(CW+GX),Y=p=>8+p.row*(CH+GY),Wd=12+C*(CW+GX)-GX+12,Ht=8+row*(CH+GY)-GY+16;
-  let edges='',cards='';
+  PERT={pid,CW,CH,sc,pos:{},edges:[]};
+  leafs.forEach(t=>{const q=pos[t.id];PERT.pos[t.id]={x:t.px!=null?t.px:X(q),y:t.py!=null?t.py:Y(q)};});
+  leafs.forEach(t=>(t.preds||[]).forEach(p=>{if(PERT.pos[p.id]&&p.id!==t.id)PERT.edges.push({a:p.id,b:t.id,dash:(p.type||'FS')!=='FS',crit:!!(sc.map[p.id]&&sc.map[t.id]&&sc.map[p.id].critical&&sc.map[t.id].critical)});}));
+  let cards='';
   leafs.forEach(t=>{
-    (t.preds||[]).forEach(p=>{
-      const a=pos[p.id],b=pos[t.id];if(!a||!b)return;
-      const x1=X(a)+CW/2,y1=Y(a)+CH,x2=X(b)+CW/2,y2=Y(b),ym=y2-GY/2+2;
-      const crit=sc.map[p.id]&&sc.map[t.id]&&sc.map[p.id].critical&&sc.map[t.id].critical,c=crit?'#1D2327':'#8A8378';
-      edges+=`<path d="M${x1} ${y1}V${ym}H${x2}V${y2-6}" fill="none" stroke="${c}" stroke-width="${crit?2.2:1.4}" ${(p.type||'FS')==='FS'?'':'stroke-dasharray="4 3"'} stroke-linejoin="round"/><polygon points="${x2},${y2-1} ${x2-4.5},${y2-8} ${x2+4.5},${y2-8}" fill="${c}"/>`;
-    });
-  });
-  leafs.forEach(t=>{
-    const p=pos[t.id],s=sc.map[t.id],done=t.status==='done',crit=s&&s.critical&&!done;
+    const q=PERT.pos[t.id],s=sc.map[t.id],done=t.status==='done',crit=s&&s.critical&&!done;
     const fill=done?'#fff':urgFill(t.due||(s?s.es:Date.now()));
     const lk=S.link&&S.link.on,sel=lk&&S.link.from===t.id;
-    cards+=`<button data-act="${lk?'plink':'edit'}" data-id="${t.id}" style="position:absolute;${sel?'outline:4px solid #0F766E;outline-offset:2px;':''}left:${X(p)}px;top:${Y(p)}px;width:${CW}px;height:${CH}px;box-sizing:border-box;padding:4px 8px;border-radius:10px;text-align:left;background:${fill};border:${crit?'3px solid #1D2327':done?'1.5px dashed #8A8378':'1px solid #B8B1A0'};color:${done?'#5B6166':'#1D2327'};display:flex;align-items:center;gap:6px;overflow:hidden">${t.starred?`<span style="flex:none">${svg('star',13,0)}</span>`:''}${done?`<span style="flex:none">${svg('chk',13,3)}</span>`:''}<span style="min-width:0"><b style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:16px;overflow-wrap:anywhere">${esc(t.name)}</b><span style="font-size:12px;line-height:16px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(fmtDur(t.durationMin))}${s?' · '+esc(fmtShort(s.es,sc.fine)):''}</span></span></button>`;
+    cards+=`<div role="button" tabindex="0" data-pcard="${t.id}" style="position:absolute;cursor:grab;user-select:none;-webkit-user-select:none;${sel?'outline:4px solid #0F766E;outline-offset:2px;':''}left:${q.x}px;top:${q.y}px;width:${CW}px;height:${CH}px;box-sizing:border-box;padding:4px 8px;border-radius:10px;text-align:left;background:${fill};border:${crit?'3px solid #1D2327':done?'1.5px dashed #8A8378':'1px solid #B8B1A0'};color:${done?'#5B6166':'#1D2327'};display:flex;align-items:center;gap:6px;overflow:hidden">${t.starred?`<span style="flex:none">${svg('star',13,0)}</span>`:''}${done?`<span style="flex:none">${svg('chk',13,3)}</span>`:''}<span style="min-width:0"><b style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:13px;line-height:16px;overflow-wrap:anywhere">${esc(t.name)}</b><span style="font-size:12px;line-height:16px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(fmtDur(t.durationMin))}${s?' · '+esc(fmtShort(s.es,sc.fine)):''}</span></span></div>`;
   });
   const lkOn=S.link&&S.link.on,fromT=lkOn&&S.link.from?byId.get(S.link.from):null;
-  const bar=`<div class="rw" style="margin-bottom:8px"><button class="btn sm ${lkOn?'pri':''}" data-act="plinktoggle" aria-pressed="${!!lkOn}">${lkOn?'Terminar de enlazar':'Enlazar tareas'}</button></div>`+(lkOn?`<div class="why" style="margin-bottom:8px">${fromT?`Va primero: <b>${esc(fromT.name)}</b>. Ahora tocá la que viene <b>después</b>. Si ya estaban enlazadas, se desenlazan.`:'Tocá la tarea que va <b>primero</b>, y después la que viene después.'}</div>`:'');
-  return bar+`<div style="overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:#fff"><div style="position:relative;width:${Wd}px;height:${Ht}px"><svg width="${Wd}" height="${Ht}" style="position:absolute;left:0;top:0" aria-hidden="true">${edges}</svg>${cards}</div></div>
-  <div class="mut small" style="margin-top:8px">Las flechas van de lo que hay que terminar a lo que viene después. Borde grueso: ruta crítica. Color: urgencia (rojo hoy, naranja 1–3 días, amarillo 4–7 días). Tocá una caja para editarla, o usá «Enlazar tareas» para conectar dos.</div>`;
+  const bar=`<div class="rw" style="margin-bottom:8px;flex-wrap:wrap;gap:6px"><button class="btn sm ${lkOn?'pri':''}" data-act="plinktoggle" aria-pressed="${!!lkOn}">${lkOn?'Terminar':'Enlazar'}</button><button class="btn sm" data-act="pzoom" data-k="out" aria-label="Alejar">−</button><button class="btn sm" data-act="pzoom" data-k="in" aria-label="Acercar">+</button><button class="btn sm" data-act="pzoom" data-k="fit">Ajustar</button><button class="btn sm" data-act="pzoom" data-k="reset">Ordenar</button></div>`+(lkOn?`<div class="why" style="margin-bottom:8px">${fromT?`Va primero: <b>${esc(fromT.name)}</b>. Ahora tocá la que viene <b>después</b>. Si ya estaban enlazadas, se desenlazan.`:'Tocá la tarea que va <b>primero</b>, y después la que viene después.'}</div>`:'');
+  return bar+`<div id="pertvp" style="position:relative;height:64vh;min-height:320px;overflow:hidden;touch-action:none;border:1px solid var(--line);border-radius:14px;background:#fff"><div id="pertcv" style="position:absolute;left:0;top:0;transform-origin:0 0"><svg id="pertsvg" width="1" height="1" style="position:absolute;left:0;top:0;overflow:visible" aria-hidden="true"></svg>${cards}</div></div>
+  <div class="mut small" style="margin-top:8px">Arrastrá una caja con un dedo para acomodarla; arrastrá el fondo para moverte; pellizcá con dos dedos para acercar o alejar. Las flechas van de lo que hay que terminar a lo que viene después. Borde grueso: ruta crítica. Color: urgencia. Tocá una caja para editarla, o usá «Enlazar tareas».</div>`;
+}
+let PERT=null;
+function pertEdges(){
+  const sv=$('#pertsvg');if(!sv||!PERT)return;let h='';
+  PERT.edges.forEach(e=>{
+    const a=PERT.pos[e.a],b=PERT.pos[e.b];if(!a||!b)return;
+    const x1=a.x+PERT.CW/2,y1=a.y+PERT.CH,x2=b.x+PERT.CW/2,y2=b.y,dy=Math.max(34,Math.abs(y2-y1)/2),c=e.crit?'#1D2327':'#8A8378';
+    h+=`<path d="M${x1} ${y1}C${x1} ${y1+dy} ${x2} ${y2-9-dy} ${x2} ${y2-9}" fill="none" stroke="${c}" stroke-width="${e.crit?2.2:1.4}" ${e.dash?'stroke-dasharray="4 3"':''}/><polygon points="${x2},${y2-1} ${x2-4.5},${y2-9} ${x2+4.5},${y2-9}" fill="${c}"/>`;
+  });
+  sv.innerHTML=h;
+}
+function pertApply(){const cv=$('#pertcv');if(cv&&S.pv)cv.style.transform=`translate(${S.pv.x}px,${S.pv.y}px) scale(${S.pv.z})`;}
+function pertFit(){
+  const vp=$('#pertvp');if(!vp||!PERT)return;
+  const ids=Object.keys(PERT.pos);if(!ids.length)return;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  ids.forEach(i=>{const q=PERT.pos[i];x0=Math.min(x0,q.x);y0=Math.min(y0,q.y);x1=Math.max(x1,q.x+PERT.CW);y1=Math.max(y1,q.y+PERT.CH);});
+  const W=vp.clientWidth||320,H=vp.clientHeight||400,m=12;
+  const z=Math.max(.25,Math.min(1.2,(W-2*m)/(x1-x0),(H-2*m)/(y1-y0)));
+  S.pv={z,x:(W-(x1-x0)*z)/2-x0*z,y:m-y0*z};pertApply();
+}
+function pertZoomAt(cx,cy,f){
+  const vp=$('#pertvp');if(!vp||!S.pv)return;const r=vp.getBoundingClientRect(),v=S.pv;
+  const z=Math.max(.25,Math.min(2.5,v.z*f)),px=cx-r.left,py=cy-r.top,wx=(px-v.x)/v.z,wy=(py-v.y)/v.z;
+  S.pv={z,x:px-wx*z,y:py-wy*z};pertApply();
+}
+function pertReset(){
+  if(!PERT)return;db.tasks.forEach(t=>{if(t.projectId===PERT.pid){delete t.px;delete t.py;}});
+  save();S.pv=null;render();
+}
+function pertBind(){
+  const vp=$('#pertvp');if(!vp||!PERT)return;
+  pertEdges();
+  if(S.pv)pertApply();else pertFit();
+  const ptr=new Map();let drag=null,pan=null,pin=null;
+  const dist=()=>{const a=[...ptr.values()];return Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)||1;};
+  const mid=()=>{const a=[...ptr.values()];return{x:(a[0].x+a[1].x)/2,y:(a[0].y+a[1].y)/2};};
+  vp.addEventListener('pointerdown',e=>{
+    if(e.pointerType==='mouse'&&e.button!==0)return;
+    ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    try{vp.setPointerCapture(e.pointerId);}catch(_){}
+    if(ptr.size>=2){
+      const r=vp.getBoundingClientRect(),m=mid(),v=S.pv;
+      pin={d0:dist(),z0:v.z,wx:(m.x-r.left-v.x)/v.z,wy:(m.y-r.top-v.y)/v.z};drag=null;pan=null;return;
+    }
+    const c=e.target.closest&&e.target.closest('[data-pcard]');
+    if(c){const q=PERT.pos[c.dataset.pcard];drag={id:c.dataset.pcard,el:c,sx:e.clientX,sy:e.clientY,ox:q.x,oy:q.y,moved:false};}
+    else pan={sx:e.clientX,sy:e.clientY,x0:S.pv.x,y0:S.pv.y};
+  });
+  vp.addEventListener('pointermove',e=>{
+    if(!ptr.has(e.pointerId))return;ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pin&&ptr.size>=2){
+      const r=vp.getBoundingClientRect(),m=mid(),z=Math.max(.25,Math.min(2.5,pin.z0*dist()/pin.d0));
+      S.pv={z,x:m.x-r.left-pin.wx*z,y:m.y-r.top-pin.wy*z};pertApply();return;
+    }
+    if(drag){
+      const dx=e.clientX-drag.sx,dy=e.clientY-drag.sy;
+      if(!drag.moved&&Math.hypot(dx,dy)<6)return;
+      drag.moved=true;const q=PERT.pos[drag.id];q.x=Math.round(drag.ox+dx/S.pv.z);q.y=Math.round(drag.oy+dy/S.pv.z);
+      drag.el.style.left=q.x+'px';drag.el.style.top=q.y+'px';drag.el.style.zIndex=5;pertEdges();
+    }else if(pan){S.pv={z:S.pv.z,x:pan.x0+e.clientX-pan.sx,y:pan.y0+e.clientY-pan.sy};pertApply();}
+  });
+  const end=(e,ok)=>{
+    if(!ptr.has(e.pointerId))return;ptr.delete(e.pointerId);
+    if(pin){if(ptr.size<2)pin=null;pan=null;drag=null;return;}
+    if(drag){
+      const d=drag;drag=null;
+      if(d.moved){const t=db.tasks.find(x=>x.id===d.id);if(t){t.px=PERT.pos[d.id].x;t.py=PERT.pos[d.id].y;save();}d.el.style.zIndex='';}
+      else if(ok)act(S.link&&S.link.on?'plink':'edit',{id:d.id});
+    }
+    pan=null;
+  };
+  vp.addEventListener('pointerup',e=>end(e,true));
+  vp.addEventListener('pointercancel',e=>end(e,false));
+  vp.addEventListener('wheel',e=>{e.preventDefault();pertZoomAt(e.clientX,e.clientY,e.deltaY<0?1.12:1/1.12);},{passive:false});
+  vp.addEventListener('keydown',e=>{const c=e.target.closest&&e.target.closest('[data-pcard]');if(c&&(e.key==='Enter'||e.key===' ')){e.preventDefault();act(S.link&&S.link.on?'plink':'edit',{id:c.dataset.pcard});}});
 }
 const PAL=['#0F766E','#B45309','#2563EB','#9333EA','#BE185D','#4D7C0F'];
 function calItems(all){
@@ -1375,6 +1446,7 @@ function render(){
   const nav=[['hoy','Hoy','hoy'],['proyectos','Proyectos','proy'],['bandeja','Bandeja','band'],['decidir','Decidir','dec'],['mas','Más','mas']];
   $('#app').innerHTML=`<main class="scr">${body}</main><button class="fab" data-act="capture" aria-label="Anotar algo rápido">${svg('plus',26,2.2)}</button><nav class="nav" aria-label="Navegación principal"><div>${nav.map(n=>`<button data-act="tab" data-tab="${n[0]}" ${S.tab===n[0]?'aria-current="page" class="on"':''}>${svg(n[2])}<span>${n[1]}</span></button>`).join('')}</div></nav>`;
   const gs=$('#gsc');if(gs){gs.scrollLeft=gscL;}
+  pertBind();
   drawLayer();
 }
 
@@ -1564,7 +1636,7 @@ function parseSteps(text){
 
 function act(a,d,el){
   switch(a){
-    case 'tab':S.tab=d.tab;S.link={on:false,from:null};S.wiz=null;S.avail=false;S.dec=null;S.listId=null;S.listsAll=false;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
+    case 'tab':S.pv=null;S.tab=d.tab;S.link={on:false,from:null};S.wiz=null;S.avail=false;S.dec=null;S.listId=null;S.listsAll=false;S.pid=null;S.view='lista';S.calAll=false;S.sheet=null;S.filter='todas';render();window.scrollTo(0,0);break;
     case 'toggle':{const t=taskOf(d.id);if(!t)break;if(t.status==='done'){Core.reopen(db,d.id);save();render();}else{finishTask(d.id);}break;}
     case 'other':S.offset++;render();break;
     case 'start':startTimer(d.id);break;
@@ -1582,9 +1654,10 @@ function act(a,d,el){
       const start=parseDT(L.querySelector('#np-date').value,L.querySelector('#np-time').value)||Core.defaultStart();
       const p=Core.makeProject(db,key,name,start,Date.now());if(key==='ironman'){const ev=Core.ecoEventos(ecoRead,todayISO())[0],dt=db.tasks.find(t=>t.projectId===p.id&&/d[ií]a de la carrera/i.test(t.name));if(ev&&dt){const tg=parseDT(ev.fecha,'07:00');if(tg){Core.anchorProject(db,p.id,dt.id,tg);p.name=name||ev.nombre;toast('Armé el proyecto hacia «'+ev.nombre+'» ('+ev.fecha.split('-').reverse().join('/')+').');}}['ironman_semana','ironman_natacion','ironman_t1','ironman_t2'].forEach(k=>Core.newList(db,Core.LIST_TEMPLATES[k].label.replace('Ironman: ',''),p.id,k,Date.now()));}S.pid=p.id;S.sheet=null;S.tab='proyectos';save();render();break;
     }
-    case 'openproj':S.pid=d.id;S.view='lista';S.listId=null;S.calDay=null;render();window.scrollTo(0,0);break;
-    case 'backproj':S.pid=null;S.view='lista';S.listId=null;render();break;
+    case 'openproj':S.pv=null;S.pid=d.id;S.view='lista';S.listId=null;S.calDay=null;render();window.scrollTo(0,0);break;
+    case 'backproj':S.pv=null;S.pid=null;S.view='lista';S.listId=null;render();break;
     case 'view':S.view=d.v;S.link={on:false,from:null};render();break;
+    case 'pzoom':{const vp=$('#pertvp');if(d.k==='fit')pertFit();else if(d.k==='reset')pertReset();else if(vp){const r=vp.getBoundingClientRect();pertZoomAt(r.left+r.width/2,r.top+r.height/2,d.k==='in'?1.3:1/1.3);}break;}
     case 'plinktoggle':S.link={on:!S.link.on,from:null};render();break;
     case 'plink':{
       const id=d.id;
