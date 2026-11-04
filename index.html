@@ -586,6 +586,8 @@ function toResUnit(r,q,from){
 }
 function newResource(name,kind){return {id:uid(),name,kind:kind||'persona',unit:kind==='material'?'u':'',stock:0,price:0,rate:0,me:false};}
 function resKind(r){return r.kind||'persona';}
+const lotMult=(p,t)=>{const l=p&&p.lot;if(!l||!(l.n>0)||!t||!t.scope)return 1;if(t.scope==='u')return l.n;if(t.scope==='sub')return l.n*((l.sub&&l.sub.per>0)?l.sub.per:1);return 1;};
+function applyLot(db,pid){const p=db.projects.find(x=>x.id===pid);db.tasks.forEach(t=>{if(t.projectId!==pid||(t.scope!=='u'&&t.scope!=='sub'))return;const m=lotMult(p,t);t.qty=m>1?m:null;t.perUnit=m>1;if(t.unitMin!=null)t.durationMin=t.unitMin*m;});}
 const qmult=t=>(t&&t.perUnit&&t.qty>1)?t.qty:1;
 function assignQty(db,pid,a,t){
   const p=db.projects.find(x=>x.id===pid),r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return null;
@@ -638,7 +640,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -1507,6 +1509,9 @@ function sheetHTML(){
     <div class="two"><label class="fld">Moneda<select id="ps-cur">${['ARS','USD','EUR','BRL','CLP','UYU'].map(c=>`<option ${p.currency===c?'selected':''}>${c}</option>`).join('')}</select></label>
     <label class="fld">Cambio a ${esc(db.meta.currency)}<input id="ps-fx" type="number" step="any" min="0" value="${p.fx||1}"></label></div>
     <label class="fld">Fecha del cambio<input id="ps-fxd" type="date" value="${dateVal(p.fxDate)}"></label>
+    <div class="why" style="margin:6px 0"><b>Lote de producción</b> (opcional). Ej.: 15 pelotas, con 20 caras cada una. Las tareas «por cada…» se multiplican solas.</div>
+    <div class="two"><label class="fld">Unidades del lote<input id="ps-lotn" type="number" min="0" step="1" inputmode="numeric" value="${p.lot&&p.lot.n||''}" placeholder="15"></label><label class="fld">Se llaman<input id="ps-lotname" value="${esc(p.lot&&p.lot.name||'')}" placeholder="pelotas"></label></div>
+    <div class="two"><label class="fld">Partes por unidad<input id="ps-subn" type="number" min="0" step="1" inputmode="numeric" value="${p.lot&&p.lot.sub&&p.lot.sub.per||''}" placeholder="20"></label><label class="fld">Se llaman<input id="ps-subname" value="${esc(p.lot&&p.lot.sub&&p.lot.sub.name||'')}" placeholder="caras"></label></div>
     ${anchorBlock(p.id)}
     <div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" style="font-size:16px" data-act="saveproj" data-id="${p.id}">Guardar</button></div>
     <div class="rw"><button class="btn sm" data-act="exportproj" data-id="${p.id}">Exportar proyecto (.json)</button><button class="btn sm dng" data-act="delproj" data-id="${p.id}">Eliminar</button></div>`;
@@ -1539,15 +1544,17 @@ function sheetTask(s){
   const dep=isNew?new Set():Core.dependents(db,t.id);
   const pool=db.tasks.filter(x=>x.projectId===t.projectId&&x.id!==t.id&&!Core.hasChildren(db,x)&&!dep.has(x.id));
   const phases=db.tasks.filter(x=>x.projectId===t.projectId&&t.projectId&&Core.hasChildren(db,x)&&x.id!==t.id);
-  const per=t.durationMin!=null?(t.qty>1?Math.round(t.durationMin/t.qty):t.durationMin):null;
+  const per=t.scope&&t.unitMin!=null?t.unitMin:t.durationMin!=null?(t.qty>1?Math.round(t.durationMin/t.qty):t.durationMin):null;
+  const lotP=t.projectId?projOf(t.projectId):null,lot=lotP&&lotP.lot,mU=lot?lot.n:1,mS=lot&&lot.sub?lot.n*lot.sub.per:1;
   let u='min',v=per;
   if(v!=null){if(v>=1440&&v%1440===0){u='d';v=v/1440;}else if(v>=60&&v%60===0){u='h';v=v/60;}}
   return `<h2>${isNew?'Nueva tarea':'Tarea'}</h2>
   <label class="fld">Nombre<input id="tk-name" data-focus value="${esc(t.name)}" placeholder="Empezá con un verbo: Comprar, Armar…"></label>
   <div class="two"><label class="fld">Duración<input id="tk-dur" type="number" min="0" step="any" value="${v==null?'':v}" placeholder="sin estimar"></label><label class="fld">Unidad<select id="tk-unit"><option value="min" ${u==='min'?'selected':''}>minutos</option><option value="h" ${u==='h'?'selected':''}>horas</option><option value="d" ${u==='d'?'selected':''}>días</option></select></label></div>
-  <label class="fld">¿Cuántas veces o unidades? (la duración de arriba es de cada una)<input id="tk-qty" type="number" min="1" step="1" inputmode="numeric" value="${t.qty>1?t.qty:''}" placeholder="1"></label>
+  ${lot?`<label class="fld">¿Cuántas veces se hace?<select id="tk-scope"><option value="" data-m="1">Una sola vez (todo el lote)</option><option value="u" data-m="${mU}" ${t.scope==='u'?'selected':''}>Por cada ${esc(lot.name)} (× ${mU})</option>${lot.sub?`<option value="sub" data-m="${mS}" ${t.scope==='sub'?'selected':''}>Por cada ${esc(lot.sub.name)} (× ${mS})</option>`:''}</select></label>`:''}
+  <label class="fld" id="tk-qtylab" style="${t.scope?'display:none':''}">¿Cuántas veces o unidades? (la duración de arriba es de cada una)<input id="tk-qty" type="number" min="1" step="1" inputmode="numeric" value="${t.qty>1?t.qty:''}" placeholder="1"></label>
   <div class="why" id="tk-total" style="font-size:14px">${t.qty>1&&per!=null?'Total: '+esc(fmtDur(per*t.qty)):'Si es una sola, dejalo vacío. Ej.: 10 min × 15 pelotas = 2 h 30 min.'}</div>
-  <div class="pred" id="tk-pu-wrap" style="${t.qty>1?'':'display:none'}"><label><input id="tk-pu" type="checkbox" ${t.perUnit!==false?'checked':''}> <span>Los materiales y costos de abajo son por cada unidad</span></label></div>
+  <div class="pred" id="tk-pu-wrap" style="${t.qty>1&&!t.scope?'':'display:none'}"><label><input id="tk-pu" type="checkbox" ${t.perUnit!==false?'checked':''}> <span>Los materiales y costos de abajo son por cada unidad</span></label></div>
   <div class="two"><label class="fld">Empieza (fecha)<input id="tk-sd" type="date" value="${dateVal(t.startAt)}"></label><label class="fld">Hora de inicio<input id="tk-st" type="time" value="${t.startAt!=null?timeVal(t.startAt):''}"></label></div>
   <div class="mut small" style="margin:-4px 0 8px">Opcional. La tarea no va a empezar antes de ese momento (y no te la propongo en «Hoy» hasta ese día).</div>
   <div class="two"><label class="fld">Fecha límite<input id="tk-due" type="date" value="${dateVal(t.due)}"></label><label class="fld">Responsable<input id="tk-resp" value="${esc(t.resp||'')}"></label></div>
@@ -1587,7 +1594,8 @@ function readTaskForm(){
   const name=L.querySelector('#tk-name').value.trim();
   if(!name){toast('Poné un nombre.');return;}
   const dv=L.querySelector('#tk-dur').value,unit=L.querySelector('#tk-unit').value;
-  const qtyRaw=parseInt(vv0('#tk-qty'),10),qty=qtyRaw>1?qtyRaw:null;
+  const qtyRaw=parseInt(vv0('#tk-qty'),10),scEl=L.querySelector('#tk-scope'),scope=scEl&&scEl.value||null;let qty=qtyRaw>1?qtyRaw:null;
+  if(scope){const m=parseInt(scEl.selectedOptions[0].dataset.m,10)||1;qty=m>1?m:null;}
   const per=dv===''?null:Math.max(0,Math.round(parseFloat(dv)*(unit==='d'?1440:unit==='h'?60:1)));
   const dur=per==null?null:per*(qty||1);
   const star=L.querySelector('#tk-star').checked;
@@ -1613,7 +1621,7 @@ function readTaskForm(){
   if(bad){toast('Poné la cantidad de «'+bad+'».');return;}
   if(L.querySelector('#tk-cost')){t.cost=parseFloat(vv('#tk-cost'))||0;const rc=vv('#tk-real');t.realCost=rc===''?null:(parseFloat(rc)||0);}
   t.assign=assign;
-  t.qty=qty;const pu=L.querySelector('#tk-pu');t.perUnit=qty?(pu?pu.checked:true):false;
+  t.qty=qty;const pu=L.querySelector('#tk-pu');t.perUnit=qty?(scope?true:(pu?pu.checked:true)):false;t.scope=scope;t.unitMin=scope?per:null;
   t.name=name;t.durationMin=dur;t.due=parseDateVal(L.querySelector('#tk-due').value,true);{const sd=L.querySelector('#tk-sd').value,st=L.querySelector('#tk-st').value;if(sd){const [y,m,d]=sd.split('-').map(Number),[hh,mm]=(st||'00:00').split(':').map(Number);t.startAt=new Date(y,m-1,d,hh||0,mm||0).getTime();}else t.startAt=null;}t.resp=L.querySelector('#tk-resp').value.trim();
   t.starred=star;t.notes=L.querySelector('#tk-notes').value;t.preds=preds;
   if(ph)t.parentId=ph.value||null;
@@ -1812,6 +1820,7 @@ function act(a,d,el){
       p.name=L.querySelector('#ps-name').value.trim()||p.name;
       p.start=parseDT(L.querySelector('#ps-date').value,L.querySelector('#ps-time').value)||p.start;
       p.currency=L.querySelector('#ps-cur').value;p.fx=parseFloat(L.querySelector('#ps-fx').value)||1;p.fxDate=parseDateVal(L.querySelector('#ps-fxd').value);
+      {const n=parseInt(L.querySelector('#ps-lotn').value,10),sn=parseInt(L.querySelector('#ps-subn').value,10);p.lot=n>0?{n,name:L.querySelector('#ps-lotname').value.trim()||'unidades',sub:sn>0?{per:sn,name:L.querySelector('#ps-subname').value.trim()||'partes'}:null}:null;Core.applyLot(db,p.id);}
       S.sheet=null;save();render();break;
     }
     case 'delproj':{const p=projOf(d.id);S.sheet={type:'confirm',title:'¿Eliminar proyecto?',text:`«${p.name}» y todas sus tareas se borran.`,go:'dodelproj',id:d.id,ok:'Eliminar'};drawLayer();break;}
@@ -1863,11 +1872,12 @@ document.addEventListener('submit',e=>{
   }
 });
 document.addEventListener('input',e=>{
-  const t=e.target;if(!t||!t.id||(t.id!=='tk-qty'&&t.id!=='tk-dur'))return;
+  const t=e.target;if(!t||!t.id||(t.id!=='tk-qty'&&t.id!=='tk-dur'&&t.id!=='tk-scope'))return;
   const L=$('#layer'),g=id=>L.querySelector(id);if(!g('#tk-qty'))return;
-  const q=parseInt(g('#tk-qty').value,10),dv=parseFloat(g('#tk-dur').value),u=g('#tk-unit').value;
+  const sc=g('#tk-scope'),scm=sc&&sc.value?parseInt(sc.selectedOptions[0].dataset.m,10):0,ql=g('#tk-qtylab');if(ql)ql.style.display=scm?'none':'';
+  const q=scm||parseInt(g('#tk-qty').value,10),dv=parseFloat(g('#tk-dur').value),u=g('#tk-unit').value;
   const per=isNaN(dv)?null:dv*(u==='d'?1440:u==='h'?60:1),tot=g('#tk-total'),w=g('#tk-pu-wrap');
-  if(w)w.style.display=q>1?'':'none';
+  if(w)w.style.display=q>1&&!scm?'':'none';
   if(tot)tot.textContent=(q>1&&per!=null)?'Total: '+fmtDur(Math.round(per*q)):'Si es una sola, dejalo vacío. Ej.: 10 min × 15 pelotas = 2 h 30 min.';
 });
 document.addEventListener('change',e=>{
