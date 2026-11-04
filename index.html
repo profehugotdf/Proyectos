@@ -585,13 +585,14 @@ function toResUnit(r,q,from){
 }
 function newResource(name,kind){return {id:uid(),name,kind:kind||'persona',unit:kind==='material'?'u':'',stock:0,price:0,rate:0,me:false};}
 function resKind(r){return r.kind||'persona';}
+const qmult=t=>(t&&t.perUnit&&t.qty>1)?t.qty:1;
 function assignQty(db,pid,a,t){
   const p=db.projects.find(x=>x.id===pid),r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return null;
-  if(resKind(r)==='material'){const q=toResUnit(r,a.qty||0,a.unit||r.unit);return q==null?0:q;}
-  return a.qty!=null&&a.qty!==''?a.qty:(t.durationMin||0)/60;
+  if(resKind(r)==='material'){const q=toResUnit(r,a.qty||0,a.unit||r.unit);return q==null?0:q*qmult(t);}
+  return a.qty!=null&&a.qty!==''?a.qty*qmult(t):(t.durationMin||0)/60;
 }
 function taskCost(db,t){
-  const p=db.projects.find(x=>x.id===t.projectId);let plan=+t.cost||0;const parts=[];
+  const p=db.projects.find(x=>x.id===t.projectId);let plan=(+t.cost||0)*qmult(t);const parts=[];
   if(plan)parts.push({n:'Costo propio',v:plan});
   (t.assign||[]).forEach(a=>{
     const r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return;
@@ -780,7 +781,7 @@ function treeRows(pid,parentId,depth,sc){
       if(!col)h+=treeRows(pid,t.id,depth+1,sc);
     }else{
       const s=sc.map[t.id];
-      let meta=esc(fmtDur(t.durationMin));
+      let meta=esc(fmtDur(t.durationMin))+(t.qty>1&&t.durationMin!=null?' ('+t.qty+' × '+esc(fmtDur(Math.round(t.durationMin/t.qty)))+')':'');
       if(s)meta+=' · '+esc(fmtDate(s.es,sc.fine));
       {const tc=Core.taskCost(db,t);if(tc.plan)meta+=' · '+esc(Core.money(tc.plan,(projOf(pid)||{}).currency));}
       const badges=[];
@@ -1462,11 +1463,15 @@ function sheetTask(s){
   const dep=isNew?new Set():Core.dependents(db,t.id);
   const pool=db.tasks.filter(x=>x.projectId===t.projectId&&x.id!==t.id&&!Core.hasChildren(db,x)&&!dep.has(x.id));
   const phases=db.tasks.filter(x=>x.projectId===t.projectId&&t.projectId&&Core.hasChildren(db,x)&&x.id!==t.id);
-  let u='min',v=t.durationMin;
+  const per=t.durationMin!=null?(t.qty>1?Math.round(t.durationMin/t.qty):t.durationMin):null;
+  let u='min',v=per;
   if(v!=null){if(v>=1440&&v%1440===0){u='d';v=v/1440;}else if(v>=60&&v%60===0){u='h';v=v/60;}}
   return `<h2>${isNew?'Nueva tarea':'Tarea'}</h2>
   <label class="fld">Nombre<input id="tk-name" data-focus value="${esc(t.name)}" placeholder="Empezá con un verbo: Comprar, Armar…"></label>
   <div class="two"><label class="fld">Duración<input id="tk-dur" type="number" min="0" step="any" value="${v==null?'':v}" placeholder="sin estimar"></label><label class="fld">Unidad<select id="tk-unit"><option value="min" ${u==='min'?'selected':''}>minutos</option><option value="h" ${u==='h'?'selected':''}>horas</option><option value="d" ${u==='d'?'selected':''}>días</option></select></label></div>
+  <label class="fld">¿Cuántas veces o unidades? (la duración de arriba es de cada una)<input id="tk-qty" type="number" min="1" step="1" inputmode="numeric" value="${t.qty>1?t.qty:''}" placeholder="1"></label>
+  <div class="why" id="tk-total" style="font-size:14px">${t.qty>1&&per!=null?'Total: '+esc(fmtDur(per*t.qty)):'Si es una sola, dejalo vacío. Ej.: 10 min × 15 pelotas = 2 h 30 min.'}</div>
+  <div class="pred" id="tk-pu-wrap" style="${t.qty>1?'':'display:none'}"><label><input id="tk-pu" type="checkbox" ${t.perUnit!==false?'checked':''}> <span>Los materiales y costos de abajo son por cada unidad</span></label></div>
   <div class="two"><label class="fld">Fecha límite<input id="tk-due" type="date" value="${dateVal(t.due)}"></label><label class="fld">Responsable<input id="tk-resp" value="${esc(t.resp||'')}"></label></div>
   ${phases.length?`<label class="fld">Fase<select id="tk-phase"><option value="">Sin fase</option>${phases.map(p=>`<option value="${p.id}" ${t.parentId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>`:''}
   <label class="pred"><label><input id="tk-star" type="checkbox" ${t.starred?'checked':''}> <span>Marcar como importante (máx. 3 por proyecto)</span></label></label>
@@ -1500,10 +1505,13 @@ function finishTask(id){
 }
 function readTaskForm(){
   const s=S.sheet,isNew=!s.id,t=isNew?s.draft:taskOf(s.id),L=$('#layer');
+  const vv0=id=>{const e=L.querySelector(id);return e?e.value:'';};
   const name=L.querySelector('#tk-name').value.trim();
   if(!name){toast('Poné un nombre.');return;}
   const dv=L.querySelector('#tk-dur').value,unit=L.querySelector('#tk-unit').value;
-  const dur=dv===''?null:Math.max(0,Math.round(parseFloat(dv)*(unit==='d'?1440:unit==='h'?60:1)));
+  const qtyRaw=parseInt(vv0('#tk-qty'),10),qty=qtyRaw>1?qtyRaw:null;
+  const per=dv===''?null:Math.max(0,Math.round(parseFloat(dv)*(unit==='d'?1440:unit==='h'?60:1)));
+  const dur=per==null?null:per*(qty||1);
   const star=L.querySelector('#tk-star').checked;
   if(star&&!t.starred){
     const n=db.tasks.filter(x=>x.projectId===t.projectId&&x.starred&&x.status!=='done'&&x.id!==t.id).length;
@@ -1527,6 +1535,7 @@ function readTaskForm(){
   if(bad){toast('Poné la cantidad de «'+bad+'».');return;}
   if(L.querySelector('#tk-cost')){t.cost=parseFloat(vv('#tk-cost'))||0;const rc=vv('#tk-real');t.realCost=rc===''?null:(parseFloat(rc)||0);}
   t.assign=assign;
+  t.qty=qty;const pu=L.querySelector('#tk-pu');t.perUnit=qty?(pu?pu.checked:true):false;
   t.name=name;t.durationMin=dur;t.due=parseDateVal(L.querySelector('#tk-due').value,true);t.resp=L.querySelector('#tk-resp').value.trim();
   t.starred=star;t.notes=L.querySelector('#tk-notes').value;t.preds=preds;
   if(ph)t.parentId=ph.value||null;
@@ -1773,6 +1782,14 @@ document.addEventListener('submit',e=>{
       const n=$('#capsheet-in');if(n){n.value='';n.focus();}
     }
   }
+});
+document.addEventListener('input',e=>{
+  const t=e.target;if(!t||!t.id||(t.id!=='tk-qty'&&t.id!=='tk-dur'))return;
+  const L=$('#layer'),g=id=>L.querySelector(id);if(!g('#tk-qty'))return;
+  const q=parseInt(g('#tk-qty').value,10),dv=parseFloat(g('#tk-dur').value),u=g('#tk-unit').value;
+  const per=isNaN(dv)?null:dv*(u==='d'?1440:u==='h'?60:1),tot=g('#tk-total'),w=g('#tk-pu-wrap');
+  if(w)w.style.display=q>1?'':'none';
+  if(tot)tot.textContent=(q>1&&per!=null)?'Total: '+fmtDur(Math.round(per*q)):'Si es una sola, dejalo vacío. Ej.: 10 min × 15 pelotas = 2 h 30 min.';
 });
 document.addEventListener('change',e=>{
   const t=e.target;
