@@ -1554,7 +1554,7 @@ function sheetHTML(){
   else if(s.type==='res')inner=sheetRes(s);
   else if(s.type==='blk')inner=sheetBlk(s);
   else if(s.type==='eco')inner=sheetEco(s);
-  else if(s.type==='capture')inner=`<h2>Anotar</h2><form data-form="capsheet"><label class="fld">Lo que tengas en la cabeza<input id="capsheet-in" data-focus autocomplete="off" placeholder="Escribí y Enter"></label></form><div class="mut small" id="capcount">${s.n?`Anotadas: ${s.n}`:'Se guarda en la Bandeja. Ordenás después.'}</div><button class="btn blk" data-act="closesheet">Listo</button>`;
+  else if(s.type==='capture')inner=`<h2>Anotar</h2><form data-form="capsheet"><label class="fld">Lo que tengas en la cabeza<input id="capsheet-in" data-focus autocomplete="off" placeholder="Escribí y Enter"></label></form><div class="mut small" id="capcount">${s.n?`Anotadas: ${s.n} · en ${s.pid?'«'+esc(projOf(s.pid).name)+'»':'la Bandeja'}`:(s.pid?'Se guarda en el proyecto «'+esc(projOf(s.pid).name)+'». Ordenás después.':'Se guarda en la Bandeja. Ordenás después.')}</div><button class="btn blk" data-act="closesheet">Listo</button>`;
   else if(s.type==='newproj')inner=`<h2>Nuevo proyecto</h2><label class="fld">Nombre<input id="np-name" data-focus placeholder="Ej.: Reforma del baño"></label>
     <label class="fld">Plantilla<select id="np-tpl">${Object.entries(Core.TEMPLATES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join('')}</select></label>
     <div class="two"><label class="fld">Fecha de inicio<input id="np-date" type="date" value="${dateVal(Date.now())}"></label><label class="fld">Hora<input id="np-time" type="time" value="09:00"></label></div>
@@ -1628,10 +1628,10 @@ function sheetTask(s){
 
 /* ---------- acciones ---------- */
 function closeSheet(){S.sheet=null;render();}
-function openCapture(){S.sheet={type:'capture',n:0};drawLayer();}
-function addInbox(name){
+function openCapture(){S.sheet={type:'capture',n:0,pid:(S.tab==='proyectos'&&S.pid&&projOf(S.pid))?S.pid:null};drawLayer();}
+function addInbox(name,pid){
   name=String(name).trim();if(!name)return false;
-  db.tasks.push({id:Core.uid(),projectId:null,parentId:null,name,durationMin:null,status:'todo',percent:0,preds:[],starred:false,resp:'',notes:'',due:null,createdAt:Date.now()});
+  db.tasks.push({id:Core.uid(),projectId:pid||null,parentId:null,name,durationMin:null,status:'todo',percent:0,preds:[],starred:false,resp:'',notes:'',due:null,createdAt:Date.now()});
   save();return true;
 }
 function startTimer(id){
@@ -1925,10 +1925,10 @@ document.addEventListener('submit',e=>{
     if(l&&v){v.split(/\n|,\s*(?=[A-Za-zÁÉÍÓÚáéíóúñÑ])/).map(x=>x.trim()).filter(Boolean).forEach(x=>l.items.push({id:Core.uid(),text:x,done:false}));save();render();const n=$('#li-in');if(n)n.focus();}
   }
   else if(f.dataset.form==='capsheet'){
-    const i=$('#capsheet-in');if(addInbox(i.value)){
-      S.sheet.n=(S.sheet.n||0)+1;
-      if(S.tab==='bandeja'||S.tab==='hoy'){render();}
-      else{i.value='';$('#capcount').textContent='Anotadas: '+S.sheet.n;}
+    const i=$('#capsheet-in');if(addInbox(i.value,S.sheet.pid)){
+      S.sheet.n=(S.sheet.n||0)+1;const dest=S.sheet.pid?'«'+projOf(S.sheet.pid).name+'»':'la Bandeja';toast('Anotado en '+dest+'.');
+      if(S.tab==='bandeja'||S.tab==='hoy'||S.sheet.pid){render();}
+      else{i.value='';$('#capcount').textContent='Anotadas: '+S.sheet.n+' · en '+dest;}
       const n=$('#capsheet-in');if(n){n.value='';n.focus();}
     }
   }
