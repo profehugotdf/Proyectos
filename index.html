@@ -602,6 +602,78 @@ function retro(db,pid){
     delayDays:(allDone&&realFinish&&sc.count)?Math.round((realFinish-sc.finish)/DAY):null,dev,units,late,cost:projectCosts(db,pid),
     bias:timedPlan?(timedReal/timedPlan-1):null};
 }
+
+// ---- Agenda (.ics de Google): lectura pura, sin DOM ----
+function parseICS(text,now,opt){
+  opt=opt||{};now=now||Date.now();
+  const from=opt.from!=null?opt.from:now-45*DAY,to=opt.to!=null?opt.to:now+400*DAY,CAP=opt.cap||6000;
+  const lines=String(text||'').replace(/\r\n?/g,'\n').replace(/\n[ \t]/g,'').split('\n');
+  const unesc=v=>String(v||'').replace(/\\[nN]/g,'\n').replace(/\\([,;\\])/g,'$1');
+  const pd=(val,params)=>{
+    val=String(val||'').trim();let m;
+    if(/VALUE=DATE(?!-)/.test(params)||/^\d{8}$/.test(val)){m=/^(\d{4})(\d\d)(\d\d)/.exec(val);return m?{ms:new Date(+m[1],+m[2]-1,+m[3]).getTime(),allDay:true}:null;}
+    m=/^(\d{4})(\d\d)(\d\d)T(\d\d)(\d\d)(\d\d)?(Z?)/.exec(val);if(!m)return null;
+    return {ms:m[7]?Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+(m[6]||0)):new Date(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+(m[6]||0)).getTime(),allDay:false};
+  };
+  const evs=[];let cur=null;
+  lines.forEach(l=>{
+    if(l==='BEGIN:VEVENT'){cur={ex:[]};return;}
+    if(l==='END:VEVENT'){if(cur)evs.push(cur);cur=null;return;}
+    if(!cur)return;const i=l.indexOf(':');if(i<0)return;
+    const head=l.slice(0,i),val=l.slice(i+1),parts=head.split(';'),name=parts[0].toUpperCase(),params=parts.slice(1).join(';');
+    if(name==='DTSTART'){const d=pd(val,params);if(d){cur.start=d.ms;cur.allDay=d.allDay;}}
+    else if(name==='DTEND'){const d=pd(val,params);if(d)cur.end=d.ms;}
+    else if(name==='DURATION'){const m=/^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/.exec(val.trim());if(m)cur.dur=((+m[1]||0)*7*1440+(+m[2]||0)*1440+(+m[3]||0)*60+(+m[4]||0))*MIN;}
+    else if(name==='SUMMARY')cur.title=unesc(val);
+    else if(name==='LOCATION')cur.loc=unesc(val);
+    else if(name==='UID')cur.uid=val.trim();
+    else if(name==='STATUS')cur.status=val.trim().toUpperCase();
+    else if(name==='RRULE')cur.rrule=val.trim();
+    else if(name==='EXDATE')val.split(',').forEach(x=>{const d=pd(x,params);if(d)cur.ex.push(d.allDay?d.ms:d.ms);});
+    else if(name==='RECURRENCE-ID'){const d=pd(val,params);if(d)cur.rec=d.ms;}
+  });
+  const out=[],over=new Set();
+  evs.forEach(e=>{if(e.rec!=null&&e.uid)over.add(e.uid+'|'+e.rec);});
+  const push=(e,s0,e0)=>{if(out.length>=CAP)return;if(e0<from||s0>to)return;out.push({id:(e.uid||'x')+'@'+s0,title:e.title||'(sin título)',start:s0,end:e0,allDay:!!e.allDay,loc:e.loc||''});};
+  const DOW={SU:0,MO:1,TU:2,WE:3,TH:4,FR:5,SA:6};
+  evs.forEach(e=>{
+    if(e.start==null||e.status==='CANCELLED')return;
+    const len=e.end!=null?Math.max(0,e.end-e.start):e.dur!=null?e.dur:(e.allDay?DAY:0);
+    if(!e.rrule||e.rec!=null){push(e,e.start,e.start+len);return;}
+    const R={};e.rrule.split(';').forEach(x=>{const k=x.split('=');R[k[0]]=k[1];});
+    const iv=Math.max(1,parseInt(R.INTERVAL,10)||1),cnt=R.COUNT?parseInt(R.COUNT,10):Infinity;
+    let until=Infinity;if(R.UNTIL){const d=pd(R.UNTIL,'');if(d)until=d.allDay?d.ms+DAY-1:d.ms;}
+    const S0=new Date(e.start),H=S0.getHours(),Mi=S0.getMinutes(),Se=S0.getSeconds();
+    const at=(y,m,d)=>new Date(y,m,d,H,Mi,Se).getTime();
+    const ex=new Set(e.ex);let n=0,guard=0,stop=false;
+    const emit=t=>{
+      if(t<e.start)return true;if(t>until||n>=cnt||t>to){stop=true;return false;}
+      n++;if(!ex.has(t)&&!over.has((e.uid||'')+'|'+t))push(e,t,t+len);return true;
+    };
+    const byday=R.BYDAY?R.BYDAY.split(','):null,freq=R.FREQ;
+    if(freq==='DAILY'){for(let k=0;!stop&&guard<4000;k++,guard++)emit(at(S0.getFullYear(),S0.getMonth(),S0.getDate()+k*iv));}
+    else if(freq==='WEEKLY'){
+      const days=(byday?byday.map(x=>DOW[x.slice(-2)]):[S0.getDay()]).filter(x=>x!=null).sort((a,b)=>((a+6)%7)-((b+6)%7));
+      const ws=S0.getDate()-((S0.getDay()+6)%7);
+      for(let k=0;!stop&&guard<1500;k++,guard++)for(const dw of days){emit(at(S0.getFullYear(),S0.getMonth(),ws+k*iv*7+((dw+6)%7)));if(stop)break;}
+    }else if(freq==='MONTHLY'){
+      for(let k=0;!stop&&guard<600;k++,guard++){
+        const y=S0.getFullYear(),mo=S0.getMonth()+k*iv,first=new Date(y,mo,1),ym=first.getMonth();let cands=[];
+        if(byday){byday.forEach(x=>{const m=/^(-?\d+)?([A-Z]{2})$/.exec(x);if(!m||DOW[m[2]]==null)return;const dw=DOW[m[2]],nn=m[1]?parseInt(m[1],10):0;
+          const all=[];for(let d=1;d<=31;d++){const dt=new Date(y,mo,d);if(dt.getMonth()!==ym)break;if(dt.getDay()===dw)all.push(d);}
+          if(!nn)cands.push(...all);else{const d=nn>0?all[nn-1]:all[all.length+nn];if(d)cands.push(d);}});}
+        else if(R.BYMONTHDAY)cands=R.BYMONTHDAY.split(',').map(x=>parseInt(x,10)).filter(x=>x>0);
+        else cands=[S0.getDate()];
+        cands=[...new Set(cands)].sort((a,b)=>a-b);
+        for(const d of cands){const dt=new Date(y,mo,d);if(dt.getMonth()!==ym)continue;emit(at(y,mo,d));if(stop)break;}
+      }
+    }else if(freq==='YEARLY'){
+      for(let k=0;!stop&&guard<200;k++,guard++){const y=S0.getFullYear()+k*iv,dt=new Date(y,S0.getMonth(),S0.getDate());if(dt.getMonth()!==S0.getMonth())continue;emit(at(y,S0.getMonth(),S0.getDate()));}
+    }else push(e,e.start,e.start+len);
+  });
+  out.sort((a,b)=>a.start-b.start);
+  return out;
+}
 const qmult=t=>(t&&t.perUnit&&t.qty>1)?t.qty:1;
 function assignQty(db,pid,a,t){
   const p=db.projects.find(x=>x.id===pid),r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return null;
@@ -654,7 +726,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {retro,lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {parseICS,retro,lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -662,7 +734,7 @@ return {retro,lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBu
 (function(){
 'use strict';
 let db=null;
-const S={pv:null,tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,link:{on:false,from:null},dec:null,listId:null,listsAll:false,showDone:false,wiz:null};
+const S={hoyMode:'foco',ag:null,pv:null,tab:'hoy',pid:null,offset:0,sheet:null,collapsed:{},filter:'todas',celebrate:null,toast:null,view:'lista',gz:1,calMode:'mes',calDay:null,calAll:false,avail:false,link:{on:false,from:null},dec:null,listId:null,listsAll:false,showDone:false,wiz:null};
 let installEv=null,persisted=null;
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEv=e;if(S.tab==='mas'&&!S.sheet)render();});
 window.addEventListener('appinstalled',()=>{installEv=null;toast('Instalada.');if(S.tab==='mas')render();});
@@ -741,7 +813,73 @@ function pillFor(r){
 function checkBtn(t){return `<button class="ck ${t.status==='done'?'on':''}" data-act="toggle" data-id="${t.id}" aria-label="${t.status==='done'?'Reabrir':'Marcar como hecha'}: ${esc(t.name)}"><i>${t.status==='done'?svg('chk',14,3):''}</i></button>`;}
 function subLine(t){const p=projOf(t.projectId);return `${esc(p?p.name:'Bandeja')} · ${esc(fmtDur(t.durationMin))}`;}
 
-function viewHoy(){
+
+async function unzipICS(buf){
+  const u8=new Uint8Array(buf),dv=new DataView(buf),dec=new TextDecoder('utf-8'),texts=[];
+  let e=-1;for(let i=u8.length-22;i>=Math.max(0,u8.length-70000);i--){if(dv.getUint32(i,true)===0x06054b50){e=i;break;}}
+  if(e<0)throw new Error('No pude leer el .zip.');
+  const n=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);
+  for(let k=0;k<n;k++){
+    if(dv.getUint32(p,true)!==0x02014b50)break;
+    const meth=dv.getUint16(p+10,true),cs=dv.getUint32(p+20,true),nl=dv.getUint16(p+28,true),xl=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),lo=dv.getUint32(p+42,true);
+    const name=dec.decode(u8.subarray(p+46,p+46+nl));p+=46+nl+xl+cl;
+    if(!/\.ics$/i.test(name))continue;
+    const ds=lo+30+dv.getUint16(lo+26,true)+dv.getUint16(lo+28,true),raw=u8.subarray(ds,ds+cs);
+    if(meth===0)texts.push(dec.decode(raw));
+    else if(meth===8){const out=await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();texts.push(dec.decode(out));}
+  }
+  return texts;
+}
+const hhmm=ms=>{const d=new Date(ms);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');};
+function agendaItems(d0){
+  const d1=d0+86400000,it=[],ag=(db.meta.agenda&&db.meta.agenda.events)||[];
+  ag.forEach(e=>{
+    if(e.allDay){if(e.start<d1&&e.end>d0)it.push({k:'ev',allDay:true,title:e.title,loc:e.loc,s:d0,e:d0});}
+    else if(e.start<d1&&Math.max(e.end,e.start+1)>d0)it.push({k:'ev',title:e.title,loc:e.loc,s:e.start,e:e.end});
+  });
+  db.tasks.forEach(t=>{
+    if(t.status==='done'||Core.hasChildren(db,t))return;
+    if(t.startAt!=null&&t.startAt>=d0&&t.startAt<d1)it.push({k:'task',t,title:t.name,s:t.startAt,e:t.startAt+(t.durationMin||0)*60000});
+    if(t.due&&t.due>=d0&&t.due<d1)it.push({k:'due',t,title:t.name,s:t.due,e:t.due});
+  });
+  it.sort((a,b)=>(b.allDay?1:0)-(a.allDay?1:0)||a.s-b.s);
+  const timed=it.filter(x=>(x.k==='ev'||x.k==='task')&&!x.allDay&&x.e>x.s);
+  timed.forEach((a,i)=>timed.forEach((b,j)=>{if(i<j&&a.s<b.e&&b.s<a.e){(a.clash=a.clash||[]).push(b.title);(b.clash=b.clash||[]).push(a.title);}}));
+  return it;
+}
+function agendaDay(d0){
+  const it=agendaItems(d0);if(!it.length)return '<div class="mut small" style="padding:4px 2px 10px">Libre.</div>';
+  return it.map(x=>{
+    const col=x.k==='ev'?'#3B6EA8':x.k==='task'?'#0F766E':'#B45309';
+    const tm=x.allDay?'Todo<br>el día':x.k==='due'?'Vence':x.e>x.s?hhmm(x.s)+'<br>'+hhmm(x.e):hhmm(x.s);
+    const inner=`<span class="mut small" style="flex:none;width:58px;line-height:1.25;font-variant-numeric:tabular-nums">${tm}</span><span class="tx" style="flex:1;min-width:0"><div class="nm">${esc(x.title)}</div>${x.loc?`<div class="mut small">${esc(x.loc)}</div>`:''}${x.k==='task'?'<div class="mut small">Tarea con inicio fijo</div>':''}${x.clash?`<div class="warn small" style="margin-top:4px">Se pisa con: ${esc(x.clash.join(', '))}</div>`:''}</span>`;
+    const sty=`border-left:4px solid ${col};padding-left:10px;width:100%;text-align:left`;
+    return x.t?`<button class="item" style="${sty};cursor:pointer" data-act="edit" data-id="${x.t.id}">${inner}</button>`:`<div class="item" style="${sty}">${inner}</div>`;
+  }).join('');
+}
+function hoyTabs(){return `<div class="chips" style="margin-bottom:8px">${[['foco','Prioridades'],['agenda','Agenda']].map(v=>`<button class="chip ${S.hoyMode===v[0]?'on':''}" data-act="hoymode" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>`;}
+function agendaStrip(){
+  const ag=db.meta.agenda;if(!ag||!ag.events||!ag.events.length)return '';
+  const d0=new Date();d0.setHours(0,0,0,0);const now=Date.now();
+  const it=agendaItems(d0.getTime()).filter(x=>x.k==='ev'&&(x.allDay||x.e>=now||x.s>=now)).slice(0,3);
+  if(!it.length)return '';
+  return `<div class="card" style="gap:6px;margin-bottom:10px"><div class="lab">En tu agenda hoy</div>${it.map(x=>`<div class="small"><b>${x.allDay?'Todo el día':hhmm(x.s)}</b> · ${esc(x.title)}${x.loc?' · '+esc(x.loc):''}</div>`).join('')}<button class="btn sm" data-act="hoymode" data-v="agenda">Ver agenda</button></div>`;
+}
+function viewAgenda(){
+  const ag=db.meta.agenda,t0=new Date();t0.setHours(0,0,0,0);
+  if(!S.ag)S.ag={day:t0.getTime(),span:'dia'};
+  const a=S.ag;let h='';
+  if(!ag||!ag.events||!ag.events.length)
+    return `<div class="card" style="gap:10px"><div class="lab">Agenda de Google</div><p style="margin:0">Todavía no cargaste tu agenda.</p><p class="mut small" style="margin:0">En Google Calendar (desde la compu, o la versión web del navegador en modo «sitio de escritorio»): <b>Ajustes → Importar y exportar → Exportar</b>. Te baja un .zip. Elegilo acá abajo, sin descomprimir. También sirve el .ics suelto, por ejemplo el de «Dirección secreta en formato iCal» de tu calendario.</p><button class="btn pri blk" data-act="importics">Importar agenda (.zip o .ics)</button></div>`;
+  const nav=`<div class="rw" style="margin-bottom:8px;flex-wrap:wrap;gap:6px"><button class="btn sm" data-act="agday" data-d="-1" aria-label="Anterior">‹</button><button class="btn sm" data-act="agday" data-d="0">Hoy</button><button class="btn sm" data-act="agday" data-d="1" aria-label="Siguiente">›</button><button class="btn sm ${a.span==='dia'?'pri':''}" data-act="agspan" data-v="dia">Día</button><button class="btn sm ${a.span==='sem'?'pri':''}" data-act="agspan" data-v="sem">7 días</button></div>`;
+  const lab=ms=>new Date(ms).toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long'});
+  h+=nav;
+  const n=a.span==='sem'?7:1;
+  for(let i=0;i<n;i++){const d=new Date(a.day);d.setDate(d.getDate()+i);const ms=d.getTime();h+=`<div class="sec">${esc(lab(ms).replace(/^./,c=>c.toUpperCase()))}</div>${agendaDay(ms)}`;}
+  h+=`<div class="mut small" style="margin-top:10px">Agenda cargada el ${esc(fmtDate(ag.importedAt))} · ${ag.events.length} eventos. Para actualizarla, volvé a importar. <button class="btn sm" data-act="importics">Actualizar</button> <button class="btn sm dng" data-act="rmics">Quitar</button></div>`;
+  return h;
+}
+function viewHoyFoco(){
   const fecha=new Date().toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long'});
   const r=Core.rank(db,Date.now());
   const n=doneToday();
@@ -855,6 +993,7 @@ function viewInforme(pid){
   <div class="rw"><button class="btn pri" data-act="saveretro" data-id="${pid}">Guardar notas</button><button class="btn" data-act="copyretro" data-id="${pid}">Copiar informe</button></div>`;
   return h;
 }
+function viewHoy(){return S.hoyMode==='agenda'?hoyTabs()+viewAgenda():hoyTabs()+agendaStrip()+viewHoyFoco();}
 function viewProyecto(pid){
   const p=projOf(pid),pr=Core.projectProgress(db,pid),sc=Core.schedule(db,pid);
   let h=`<div class="hdr"><button class="back" data-act="backproj" aria-label="Volver a proyectos">${svg('back',24,2.2)}</button><h1>${esc(p.name)}</h1></div>
@@ -1494,13 +1633,13 @@ function viewMas(){
   return `<header class="hd"><h1>Más</h1></header>
   <div class="card" style="gap:10px"><div class="lab">Mi tiempo</div><button class="btn blk" data-act="availopen">Mi disponibilidad y tope diario</button><p class="mut small" style="margin:0">Clases, entrenamientos protegidos y cuántas horas por día querés dedicar a proyectos.</p></div>
   <div class="card" style="gap:10px"><div class="lab">Instalación</div>${instBody}<p class="mut small" style="margin:0">Una vez abierta, funciona sin conexión. Protección contra borrado automático: ${persTxt}.</p></div>
-  <div class="card" style="gap:10px"><div class="lab">Importar</div><button class="btn blk" data-act="goimport">Proyecto de MS Project (.xml)</button><button class="btn blk" data-act="importjson">Restaurar copia (.json)</button></div>
+  <div class="card" style="gap:10px"><div class="lab">Importar</div><button class="btn blk" data-act="goimport">Proyecto de MS Project (.xml)</button><button class="btn blk" data-act="importics">Agenda de Google (.zip o .ics)</button><button class="btn blk" data-act="importjson">Restaurar copia (.json)</button></div>
   <div class="card" style="gap:10px"><div class="lab">Copia de seguridad</div><button class="btn blk" data-act="exportjson">Guardar copia (.json)</button><p class="mut small" style="margin:0">Los datos viven en este navegador (IndexedDB «Proyectos»). Tu app Backup también los puede resguardar.</p></div>
   <div class="card" style="gap:10px"><div class="lab">Preferencias</div>
   <label class="fld">Mi nombre (para «mis tareas» al compartir)<input id="set-name" value="${esc(db.meta.name)}"></label>
   <label class="fld">Moneda base<select id="set-cur">${['ARS','USD','EUR','BRL','CLP','UYU'].map(c=>`<option ${db.meta.currency===c?'selected':''}>${c}</option>`).join('')}</select></label>
   <button class="btn blk" data-act="savesettings">Guardar</button></div>
-  <input type="file" id="f-xml" accept=".xml,text/xml,application/xml" hidden><input type="file" id="f-json" accept=".json,application/json" hidden>`;
+  <input type="file" id="f-ics" accept=".ics,.zip,text/calendar,application/zip" hidden><input type="file" id="f-xml" accept=".xml,text/xml,application/xml" hidden><input type="file" id="f-json" accept=".json,application/json" hidden>`;
 }
 let gscL=0;
 function render(){
@@ -1734,6 +1873,11 @@ function act(a,d,el){
     case 'pzoom':{const vp=$('#pertvp');if(d.k==='fit')pertFit();else if(d.k==='reset')pertReset();else if(vp){const r=vp.getBoundingClientRect();pertZoomAt(r.left+r.width/2,r.top+r.height/2,d.k==='in'?1.3:1/1.3);}break;}
     case 'saveretro':{const p=projOf(d.id),L=$('#app');p.retro={bien:L.querySelector('#rt-bien').value.trim(),mejorar:L.querySelector('#rt-mejorar').value.trim(),prox:L.querySelector('#rt-prox').value.trim()};save();toast('Notas guardadas.');break;}
     case 'copyretro':{const p=projOf(d.id),L=$('#app');if(L.querySelector('#rt-bien'))p.retro={bien:L.querySelector('#rt-bien').value.trim(),mejorar:L.querySelector('#rt-mejorar').value.trim(),prox:L.querySelector('#rt-prox').value.trim()};save();const tx=retroText(d.id);try{navigator.clipboard.writeText(tx).then(()=>toast('Informe copiado.'),()=>toast('No pude copiar.'));}catch(e){toast('No pude copiar.');}break;}
+    case 'hoymode':S.hoyMode=d.v;S.tab='hoy';render();break;
+    case 'agspan':if(S.ag)S.ag.span=d.v;render();break;
+    case 'agday':{if(!S.ag)break;if(d.d==='0'){const t0=new Date();t0.setHours(0,0,0,0);S.ag.day=t0.getTime();}else{const x=new Date(S.ag.day);x.setDate(x.getDate()+(+d.d)*(S.ag.span==='sem'?7:1));S.ag.day=x.getTime();}render();break;}
+    case 'importics':{let f=$('#f-ics');if(!f){f=document.createElement('input');f.type='file';f.id='f-ics';f.accept='.ics,.zip,text/calendar,application/zip';f.hidden=true;document.body.appendChild(f);}f.click();break;}
+    case 'rmics':db.meta.agenda=null;save();render();toast('Agenda quitada.');break;
     case 'plinktoggle':S.link={on:!S.link.on,from:null};render();break;
     case 'plink':{
       const id=d.id;
@@ -1946,6 +2090,20 @@ document.addEventListener('input',e=>{
 document.addEventListener('change',e=>{
   const t=e.target;
   if(t.id==='rs-kind'&&S.sheet&&S.sheet.type==='res'){act('reskind',{},t);return;}
+  if(t.id==='f-ics'&&t.files[0]){
+    const file=t.files[0];
+    (async()=>{
+      try{
+        let texts;
+        if(/\.zip$/i.test(file.name)||file.type==='application/zip')texts=await unzipICS(await file.arrayBuffer());else texts=[await file.text()];
+        const now=Date.now();let events=[];texts.forEach(x=>{events=events.concat(Core.parseICS(x,now));});
+        events.sort((a,b)=>a.start-b.start);
+        if(!events.length)throw new Error('No encontré eventos en ese archivo.');
+        db.meta.agenda={events,importedAt:now,name:file.name};save();S.hoyMode='agenda';S.tab='hoy';S.ag=null;render();toast('Agenda cargada: '+events.length+' eventos.');
+      }catch(err){toast(err.message||'No pude leer la agenda.');}
+      t.value='';
+    })();
+  }
   if(t.id==='f-xml'&&t.files[0]){
     t.files[0].text().then(txt=>{
       try{const pa=Core.parseMSProject(txt);if(!pa.tasks.length)throw new Error('No encontré tareas en el archivo.');S.sheet={type:'import',parsed:pa,mode:pa.suggest};drawLayer();}
