@@ -785,6 +785,7 @@ function treeRows(pid,parentId,depth,sc){
     }else{
       const s=sc.map[t.id];
       let meta=esc(fmtDur(t.durationMin))+(t.qty>1&&t.durationMin!=null?' ('+t.qty+' × '+esc(fmtDur(Math.round(t.durationMin/t.qty)))+')':'');
+      if(t.percent>0&&t.percent<100&&t.status!=='done')meta+=' · '+t.percent+' %';
       if(s)meta+=' · '+esc(fmtDate(s.es,sc.fine));
       {const tc=Core.taskCost(db,t);if(tc.plan)meta+=' · '+esc(Core.money(tc.plan,(projOf(pid)||{}).currency));}
       const badges=[];
@@ -1555,6 +1556,7 @@ function sheetTask(s){
   <label class="fld" id="tk-qtylab" style="${t.scope?'display:none':''}">¿Cuántas veces o unidades? (la duración de arriba es de cada una)<input id="tk-qty" type="number" min="1" step="1" inputmode="numeric" value="${t.qty>1?t.qty:''}" placeholder="1"></label>
   <div class="why" id="tk-total" style="font-size:14px">${t.qty>1&&per!=null?'Total: '+esc(fmtDur(per*t.qty)):'Si es una sola, dejalo vacío. Ej.: 10 min × 15 pelotas = 2 h 30 min.'}</div>
   <div class="pred" id="tk-pu-wrap" style="${t.qty>1&&!t.scope?'':'display:none'}"><label><input id="tk-pu" type="checkbox" ${t.perUnit!==false?'checked':''}> <span>Los materiales y costos de abajo son por cada unidad</span></label></div>
+  ${isNew?'':`<label class="fld">Avance: <b id="tk-pctv">${t.status==='done'?100:(t.percent||0)} %</b><input id="tk-pct" type="range" min="0" max="100" step="5" value="${t.status==='done'?100:(t.percent||0)}" style="width:100%;height:36px"></label>`}
   <div class="two"><label class="fld">Empieza (fecha)<input id="tk-sd" type="date" value="${dateVal(t.startAt)}"></label><label class="fld">Hora de inicio<input id="tk-st" type="time" value="${t.startAt!=null?timeVal(t.startAt):''}"></label></div>
   <div class="mut small" style="margin:-4px 0 8px">Opcional. La tarea no va a empezar antes de ese momento (y no te la propongo en «Hoy» hasta ese día).</div>
   <div class="two"><label class="fld">Fecha límite<input id="tk-due" type="date" value="${dateVal(t.due)}"></label><label class="fld">Responsable<input id="tk-resp" value="${esc(t.resp||'')}"></label></div>
@@ -1622,6 +1624,7 @@ function readTaskForm(){
   if(L.querySelector('#tk-cost')){t.cost=parseFloat(vv('#tk-cost'))||0;const rc=vv('#tk-real');t.realCost=rc===''?null:(parseFloat(rc)||0);}
   t.assign=assign;
   t.qty=qty;const pu=L.querySelector('#tk-pu');t.perUnit=qty?(scope?true:(pu?pu.checked:true)):false;t.scope=scope;t.unitMin=scope?per:null;
+  {const pe=L.querySelector('#tk-pct');if(pe){const np=parseInt(pe.value,10)||0,op=t.status==='done'?100:(t.percent||0);if(np!==op){t.percent=np;if(np>=100){t.status='done';t.doneAt=t.doneAt||Date.now();}else{t.status=np>0?'doing':'todo';t.doneAt=null;}}}}
   t.name=name;t.durationMin=dur;t.due=parseDateVal(L.querySelector('#tk-due').value,true);{const sd=L.querySelector('#tk-sd').value,st=L.querySelector('#tk-st').value;if(sd){const [y,m,d]=sd.split('-').map(Number),[hh,mm]=(st||'00:00').split(':').map(Number);t.startAt=new Date(y,m-1,d,hh||0,mm||0).getTime();}else t.startAt=null;}t.resp=L.querySelector('#tk-resp').value.trim();
   t.starred=star;t.notes=L.querySelector('#tk-notes').value;t.preds=preds;
   if(ph)t.parentId=ph.value||null;
@@ -1872,6 +1875,7 @@ document.addEventListener('submit',e=>{
   }
 });
 document.addEventListener('input',e=>{
+  if(e.target&&e.target.id==='tk-pct'){const v=$('#tk-pctv');if(v)v.textContent=e.target.value+' %';return;}
   const t=e.target;if(!t||!t.id||(t.id!=='tk-qty'&&t.id!=='tk-dur'&&t.id!=='tk-scope'))return;
   const L=$('#layer'),g=id=>L.querySelector(id);if(!g('#tk-qty'))return;
   const sc=g('#tk-scope'),scm=sc&&sc.value?parseInt(sc.selectedOptions[0].dataset.m,10):0,ql=g('#tk-qtylab');if(ql)ql.style.display=scm?'none':'';
