@@ -674,6 +674,31 @@ function parseICS(text,now,opt){
   out.sort((a,b)=>a.start-b.start);
   return out;
 }
+
+function gEvents(items,cal){
+  const out=[];
+  (items||[]).forEach(e=>{
+    if(!e||e.status==='cancelled'||e.eventType==='workingLocation')return;
+    const me=(e.attendees||[]).find(a=>a.self);if(me&&me.responseStatus==='declined')return;
+    const st=e.start||{},en=e.end||{};let s0,t0,all=false;
+    if(st.dateTime){s0=Date.parse(st.dateTime);t0=Date.parse(en.dateTime||st.dateTime);}
+    else if(st.date){all=true;const a=st.date.split('-').map(Number),b=(en.date||st.date).split('-').map(Number);s0=new Date(a[0],a[1]-1,a[2]).getTime();t0=new Date(b[0],b[1]-1,b[2]).getTime();if(t0<=s0)t0=s0+DAY;}
+    else return;
+    if(isNaN(s0))return;
+    out.push({id:(e.id||'g')+'@'+s0,title:e.summary||'(sin título)',start:s0,end:isNaN(t0)?s0:t0,allDay:all,loc:e.location||'',cal:cal||''});
+  });
+  return out;
+}
+function gTasks(items,list){
+  const out=[];
+  (items||[]).forEach(t=>{
+    if(!t||t.status==='completed'||!t.due||!t.title)return;
+    const m=/^(\d{4})-(\d\d)-(\d\d)/.exec(t.due);if(!m)return;
+    const s0=new Date(+m[1],+m[2]-1,+m[3]).getTime();
+    out.push({id:'t'+(t.id||'')+'@'+s0,title:t.title,start:s0,end:s0+DAY,allDay:true,loc:'',cal:list||'',task:true});
+  });
+  return out;
+}
 const qmult=t=>(t&&t.perUnit&&t.qty>1)?t.qty:1;
 function assignQty(db,pid,a,t){
   const p=db.projects.find(x=>x.id===pid),r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return null;
@@ -726,7 +751,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {parseICS,retro,lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {gEvents,gTasks,parseICS,retro,lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -830,11 +855,64 @@ async function unzipICS(buf){
   }
   return texts;
 }
+
+let gisP=null,gTok=null;
+function gOn(){return !!(db.meta.google&&db.meta.google.clientId);}
+function gLoad(){
+  if(window.google&&google.accounts&&google.accounts.oauth2)return Promise.resolve();
+  if(gisP)return gisP;
+  gisP=new Promise((res,rej)=>{const sc=document.createElement('script');sc.src='https://accounts.google.com/gsi/client';sc.async=true;sc.onload=()=>res();sc.onerror=()=>{gisP=null;rej(new Error('No pude cargar el acceso de Google. ¿Tenés internet? Si usás Brave, probá bajar los Shields para este sitio.'));};document.head.appendChild(sc);});
+  return gisP;
+}
+function gToken(interactive){
+  return gLoad().then(()=>new Promise((res,rej)=>{
+    if(gTok&&gTok.exp>Date.now()+60000)return res(gTok.t);
+    const tc=google.accounts.oauth2.initTokenClient({client_id:db.meta.google.clientId,scope:'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly',
+      callback:r=>{if(r.error)return rej(new Error(r.error_description||r.error));gTok={t:r.access_token,exp:Date.now()+(+r.expires_in||3600)*1000};res(gTok.t);},
+      error_callback:er=>rej(new Error(er&&er.type==='popup_closed'?'Cerraste la ventana de Google.':'No se pudo abrir la ventana de Google.'))});
+    tc.requestAccessToken({prompt:interactive?'':'none'});
+  }));
+}
+async function gSync(interactive){
+  if(S.gBusy||!gOn())return;
+  S.gBusy=true;S.gErr=null;if(interactive)render();
+  try{
+    const tok=await gToken(interactive);
+    const get=async url=>{
+      const r=await fetch(url,{headers:{Authorization:'Bearer '+tok}});
+      const j=await r.json().catch(()=>({}));
+      if(r.status===401){gTok=null;throw new Error('Google no aceptó el acceso. Probá de nuevo.');}
+      if(!r.ok){const e=new Error((j.error&&j.error.message)||('Error '+r.status));e.status=r.status;throw e;}
+      return j;
+    };
+    const now=Date.now(),tmin=encodeURIComponent(new Date(now-30*864e5).toISOString()),tmax=encodeURIComponent(new Date(now+180*864e5).toISOString());
+    const cals=((await get('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader&maxResults=100')).items||[]).filter(c=>c.selected!==false);
+    let events=[];
+    for(const c of cals){
+      let pt='',pages=0;
+      do{
+        const j=await get('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(c.id)+'/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin='+tmin+'&timeMax='+tmax+(pt?'&pageToken='+encodeURIComponent(pt):''));
+        events=events.concat(Core.gEvents(j.items,c.summaryOverride||c.summary));pt=j.nextPageToken||'';pages++;
+      }while(pt&&pages<8);
+    }
+    let tasks=0;
+    try{
+      const lists=(await get('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=20')).items||[];
+      for(const l of lists){const j=await get('https://tasks.googleapis.com/tasks/v1/lists/'+encodeURIComponent(l.id)+'/tasks?showCompleted=false&maxResults=100');const g=Core.gTasks(j.items,l.title);tasks+=g.length;events=events.concat(g);}
+    }catch(e){/* tareas de Google es opcional: sin permiso o sin API activada, se sigue sin ellas */}
+    events.sort((a,b)=>a.start-b.start);
+    db.meta.agenda={events:events.slice(0,6000),importedAt:now,name:'Google',source:'google',calendars:cals.length,tasks};
+    save();if(interactive)toast('Agenda sincronizada: '+events.length+' eventos.');
+  }catch(e){
+    S.gErr=e.message||'No pude sincronizar.';
+    if(interactive)toast(S.gErr);
+  }finally{S.gBusy=false;if(interactive||S.tab==='hoy')render();}
+}
 const hhmm=ms=>{const d=new Date(ms);return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');};
 function agendaItems(d0){
   const d1=d0+86400000,it=[],ag=(db.meta.agenda&&db.meta.agenda.events)||[];
   ag.forEach(e=>{
-    if(e.allDay){if(e.start<d1&&e.end>d0)it.push({k:'ev',allDay:true,title:e.title,loc:e.loc,s:d0,e:d0});}
+    if(e.allDay){if(e.start<d1&&e.end>d0)it.push({k:'ev',allDay:true,title:e.title,loc:e.loc,s:d0,e:d0,tg:!!e.task});}
     else if(e.start<d1&&Math.max(e.end,e.start+1)>d0)it.push({k:'ev',title:e.title,loc:e.loc,s:e.start,e:e.end});
   });
   db.tasks.forEach(t=>{
@@ -852,7 +930,7 @@ function agendaDay(d0){
   return it.map(x=>{
     const col=x.k==='ev'?'#3B6EA8':x.k==='task'?'#0F766E':'#B45309';
     const tm=x.allDay?'Todo<br>el día':x.k==='due'?'Vence':x.e>x.s?hhmm(x.s)+'<br>'+hhmm(x.e):hhmm(x.s);
-    const inner=`<span class="mut small" style="flex:none;width:58px;line-height:1.25;font-variant-numeric:tabular-nums">${tm}</span><span class="tx" style="flex:1;min-width:0"><div class="nm">${esc(x.title)}</div>${x.loc?`<div class="mut small">${esc(x.loc)}</div>`:''}${x.k==='task'?'<div class="mut small">Tarea con inicio fijo</div>':''}${x.clash?`<div class="warn small" style="margin-top:4px">Se pisa con: ${esc(x.clash.join(', '))}</div>`:''}</span>`;
+    const inner=`<span class="mut small" style="flex:none;width:58px;line-height:1.25;font-variant-numeric:tabular-nums">${tm}</span><span class="tx" style="flex:1;min-width:0"><div class="nm">${esc(x.title)}</div>${x.loc?`<div class="mut small">${esc(x.loc)}</div>`:''}${x.k==='task'?'<div class="mut small">Tarea con inicio fijo</div>':''}${x.tg?'<div class="mut small">Recordatorio de Google Tasks</div>':''}${x.clash?`<div class="warn small" style="margin-top:4px">Se pisa con: ${esc(x.clash.join(', '))}</div>`:''}</span>`;
     const sty=`border-left:4px solid ${col};padding-left:10px;width:100%;text-align:left`;
     return x.t?`<button class="item" style="${sty};cursor:pointer" data-act="edit" data-id="${x.t.id}">${inner}</button>`:`<div class="item" style="${sty}">${inner}</div>`;
   }).join('');
@@ -869,14 +947,18 @@ function viewAgenda(){
   const ag=db.meta.agenda,t0=new Date();t0.setHours(0,0,0,0);
   if(!S.ag)S.ag={day:t0.getTime(),span:'dia'};
   const a=S.ag;let h='';
-  if(!ag||!ag.events||!ag.events.length)
-    return `<div class="card" style="gap:10px"><div class="lab">Agenda de Google</div><p style="margin:0">Todavía no cargaste tu agenda.</p><p class="mut small" style="margin:0">En Google Calendar (desde la compu, o la versión web del navegador en modo «sitio de escritorio»): <b>Ajustes → Importar y exportar → Exportar</b>. Te baja un .zip. Elegilo acá abajo, sin descomprimir. También sirve el .ics suelto, por ejemplo el de «Dirección secreta en formato iCal» de tu calendario.</p><button class="btn pri blk" data-act="importics">Importar agenda (.zip o .ics)</button></div>`;
+  if(gOn()&&!S.gTried){S.gTried=true;setTimeout(()=>gSync(false),60);}
+  if(!ag||!ag.events||!ag.events.length){
+    if(gOn())return `<div class="card" style="gap:10px"><div class="lab">Agenda de Google</div>${S.gBusy?'<p style="margin:0">Sincronizando con Google…</p>':S.gErr?`<p class="warn" style="margin:0">${esc(S.gErr)}</p>`:'<p style="margin:0">Conectado. Tocá sincronizar para traer tus compromisos.</p>'}<button class="btn pri blk" data-act="gsync">Sincronizar ahora</button><button class="btn blk" data-act="gsetup">Cambiar el código de Google</button><button class="btn blk" data-act="importics">Importar un archivo (.zip o .ics)</button></div>`;
+    return `<div class="card" style="gap:10px"><div class="lab">Agenda de Google</div><p style="margin:0">Todavía no cargaste tu agenda.</p><button class="btn pri blk" data-act="gsetup">Conectar con Google</button><p class="mut small" style="margin:0">Se actualiza sola y es solo lectura. Necesita un permiso único que se crea en Google Cloud (te explico los pasos).</p><p class="mut small" style="margin:0">O importá un archivo: en Google Calendar, <b>Ajustes → Importar y exportar → Exportar</b> baja un .zip; elegilo sin descomprimir.</p><button class="btn blk" data-act="importics">Importar archivo (.zip o .ics)</button></div>`;
+  }
   const nav=`<div class="rw" style="margin-bottom:8px;flex-wrap:wrap;gap:6px"><button class="btn sm" data-act="agday" data-d="-1" aria-label="Anterior">‹</button><button class="btn sm" data-act="agday" data-d="0">Hoy</button><button class="btn sm" data-act="agday" data-d="1" aria-label="Siguiente">›</button><button class="btn sm ${a.span==='dia'?'pri':''}" data-act="agspan" data-v="dia">Día</button><button class="btn sm ${a.span==='sem'?'pri':''}" data-act="agspan" data-v="sem">7 días</button></div>`;
   const lab=ms=>new Date(ms).toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long'});
   h+=nav;
   const n=a.span==='sem'?7:1;
   for(let i=0;i<n;i++){const d=new Date(a.day);d.setDate(d.getDate()+i);const ms=d.getTime();h+=`<div class="sec">${esc(lab(ms).replace(/^./,c=>c.toUpperCase()))}</div>${agendaDay(ms)}`;}
-  h+=`<div class="mut small" style="margin-top:10px">Agenda cargada el ${esc(fmtDate(ag.importedAt))} · ${ag.events.length} eventos. Para actualizarla, volvé a importar. <button class="btn sm" data-act="importics">Actualizar</button> <button class="btn sm dng" data-act="rmics">Quitar</button></div>`;
+  if(ag.source==='google')h+=`<div class="mut small" style="margin-top:10px">${S.gBusy?'Sincronizando…':'Sincronizada con Google a las '+hhmm(ag.importedAt)+' · '+ag.events.length+' eventos'+(ag.tasks?' (incluye '+ag.tasks+' tareas de Google)':'')+'.'} ${S.gErr?`<div class="warn" style="margin:6px 0">${esc(S.gErr)}</div>`:''}<div class="rw" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm" data-act="gsync">Sincronizar ahora</button><button class="btn sm" data-act="importics">Importar archivo</button><button class="btn sm dng" data-act="gdisc">Desconectar</button></div></div>`;
+  else h+=`<div class="mut small" style="margin-top:10px">Agenda cargada el ${esc(fmtDate(ag.importedAt))} · ${ag.events.length} eventos.<div class="rw" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm" data-act="gsetup">Conectar con Google</button><button class="btn sm" data-act="importics">Actualizar</button><button class="btn sm dng" data-act="rmics">Quitar</button></div></div>`;
   return h;
 }
 function viewHoyFoco(){
@@ -1633,7 +1715,7 @@ function viewMas(){
   return `<header class="hd"><h1>Más</h1></header>
   <div class="card" style="gap:10px"><div class="lab">Mi tiempo</div><button class="btn blk" data-act="availopen">Mi disponibilidad y tope diario</button><p class="mut small" style="margin:0">Clases, entrenamientos protegidos y cuántas horas por día querés dedicar a proyectos.</p></div>
   <div class="card" style="gap:10px"><div class="lab">Instalación</div>${instBody}<p class="mut small" style="margin:0">Una vez abierta, funciona sin conexión. Protección contra borrado automático: ${persTxt}.</p></div>
-  <div class="card" style="gap:10px"><div class="lab">Importar</div><button class="btn blk" data-act="goimport">Proyecto de MS Project (.xml)</button><button class="btn blk" data-act="importics">Agenda de Google (.zip o .ics)</button><button class="btn blk" data-act="importjson">Restaurar copia (.json)</button></div>
+  <div class="card" style="gap:10px"><div class="lab">Importar</div><button class="btn blk" data-act="goimport">Proyecto de MS Project (.xml)</button><button class="btn blk" data-act="gsetup">Conectar agenda de Google</button><button class="btn blk" data-act="importics">Agenda de Google (.zip o .ics)</button><button class="btn blk" data-act="importjson">Restaurar copia (.json)</button></div>
   <div class="card" style="gap:10px"><div class="lab">Copia de seguridad</div><button class="btn blk" data-act="exportjson">Guardar copia (.json)</button><p class="mut small" style="margin:0">Los datos viven en este navegador (IndexedDB «Proyectos»). Tu app Backup también los puede resguardar.</p></div>
   <div class="card" style="gap:10px"><div class="lab">Preferencias</div>
   <label class="fld">Mi nombre (para «mis tareas» al compartir)<input id="set-name" value="${esc(db.meta.name)}"></label>
@@ -1693,6 +1775,18 @@ function sheetHTML(){
   else if(s.type==='res')inner=sheetRes(s);
   else if(s.type==='blk')inner=sheetBlk(s);
   else if(s.type==='eco')inner=sheetEco(s);
+  else if(s.type==='gsetup')inner=`<h2>Conectar con Google</h2>
+  <p class="mut small" style="margin:0 0 8px">Se hace una sola vez. Es solo lectura: la app no puede cambiar ni borrar nada de tu calendario.</p>
+  <ol class="small" style="margin:0 0 10px;padding-left:20px;line-height:1.5">
+   <li>Entrá a <b>console.cloud.google.com</b> con tu cuenta y creá un proyecto nuevo (por ejemplo «Proyectos»).</li>
+   <li><b>APIs y servicios → Biblioteca</b>: activá <b>Google Calendar API</b> y <b>Google Tasks API</b>.</li>
+   <li><b>Pantalla de consentimiento OAuth</b> (o «Google Auth Platform»): tipo <b>Externo</b>, ponele un nombre, tu mail de contacto, y en <b>Usuarios de prueba</b> agregá tu mail de Google.</li>
+   <li><b>Credenciales → Crear credenciales → ID de cliente de OAuth</b>, tipo <b>Aplicación web</b>. En «Orígenes autorizados de JavaScript» poné <b>https://profehugotdf.github.io</b> (sin barra ni /Proyectos).</li>
+   <li>Copiá el <b>ID de cliente</b> (termina en .apps.googleusercontent.com) y pegalo acá.</li>
+  </ol>
+  <label class="fld">ID de cliente<input id="g-cid" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="123456-abc.apps.googleusercontent.com" value="${esc((db.meta.google&&db.meta.google.clientId)||'')}"></label>
+  <div class="mut small" style="margin:0 0 8px">Google te va a mostrar «app no verificada»: es normal, es tu propia app. Tocá Configuración avanzada → Continuar.</div>
+  <div class="rw"><button class="btn" data-act="closesheet">Cancelar</button><button class="btn pri" data-act="gsave">Guardar y conectar</button></div>`;
   else if(s.type==='capture')inner=`<h2>Anotar</h2><form data-form="capsheet"><label class="fld">Lo que tengas en la cabeza<input id="capsheet-in" data-focus autocomplete="off" placeholder="Escribí y Enter"></label></form><div class="mut small" id="capcount">${s.n?`Anotadas: ${s.n} · en ${s.pid?'«'+esc(projOf(s.pid).name)+'»':'la Bandeja'}`:(s.pid?'Se guarda en el proyecto «'+esc(projOf(s.pid).name)+'». Ordenás después.':'Se guarda en la Bandeja. Ordenás después.')}</div><button class="btn blk" data-act="closesheet">Listo</button>`;
   else if(s.type==='newproj')inner=`<h2>Nuevo proyecto</h2><label class="fld">Nombre<input id="np-name" data-focus placeholder="Ej.: Reforma del baño"></label>
     <label class="fld">Plantilla<select id="np-tpl">${Object.entries(Core.TEMPLATES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join('')}</select></label>
@@ -1873,6 +1967,10 @@ function act(a,d,el){
     case 'pzoom':{const vp=$('#pertvp');if(d.k==='fit')pertFit();else if(d.k==='reset')pertReset();else if(vp){const r=vp.getBoundingClientRect();pertZoomAt(r.left+r.width/2,r.top+r.height/2,d.k==='in'?1.3:1/1.3);}break;}
     case 'saveretro':{const p=projOf(d.id),L=$('#app');p.retro={bien:L.querySelector('#rt-bien').value.trim(),mejorar:L.querySelector('#rt-mejorar').value.trim(),prox:L.querySelector('#rt-prox').value.trim()};save();toast('Notas guardadas.');break;}
     case 'copyretro':{const p=projOf(d.id),L=$('#app');if(L.querySelector('#rt-bien'))p.retro={bien:L.querySelector('#rt-bien').value.trim(),mejorar:L.querySelector('#rt-mejorar').value.trim(),prox:L.querySelector('#rt-prox').value.trim()};save();const tx=retroText(d.id);try{navigator.clipboard.writeText(tx).then(()=>toast('Informe copiado.'),()=>toast('No pude copiar.'));}catch(e){toast('No pude copiar.');}break;}
+    case 'gsetup':S.sheet={type:'gsetup'};drawLayer();break;
+    case 'gsave':{const v=($('#g-cid')||{}).value||'';const id=v.trim();if(!/^[\w.-]+\.apps\.googleusercontent\.com$/.test(id)){toast('Ese ID no parece válido. Termina en .apps.googleusercontent.com');break;}db.meta.google={clientId:id};gTok=null;S.sheet=null;S.gTried=true;save();S.hoyMode='agenda';S.tab='hoy';render();gSync(true);break;}
+    case 'gsync':S.gTried=true;gSync(true);break;
+    case 'gdisc':db.meta.google=null;db.meta.agenda=null;gTok=null;S.gErr=null;S.gTried=false;save();render();toast('Google desconectado.');break;
     case 'hoymode':S.hoyMode=d.v;S.tab='hoy';render();break;
     case 'agspan':if(S.ag)S.ag.span=d.v;render();break;
     case 'agday':{if(!S.ag)break;if(d.d==='0'){const t0=new Date();t0.setHours(0,0,0,0);S.ag.day=t0.getTime();}else{const x=new Date(S.ag.day);x.setDate(x.getDate()+(+d.d)*(S.ag.span==='sem'?7:1));S.ag.day=x.getTime();}render();break;}
