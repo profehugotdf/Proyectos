@@ -588,6 +588,20 @@ function newResource(name,kind){return {id:uid(),name,kind:kind||'persona',unit:
 function resKind(r){return r.kind||'persona';}
 const lotMult=(p,t)=>{const l=p&&p.lot;if(!l||!(l.n>0)||!t||!t.scope)return 1;if(t.scope==='u')return l.n;if(t.scope==='sub')return l.n*((l.sub&&l.sub.per>0)?l.sub.per:1);return 1;};
 function applyLot(db,pid){const p=db.projects.find(x=>x.id===pid);db.tasks.forEach(t=>{if(t.projectId!==pid||(t.scope!=='u'&&t.scope!=='sub'))return;const m=lotMult(p,t);t.qty=m>1?m:null;t.perUnit=m>1;if(t.unitMin!=null)t.durationMin=t.unitMin*m;});}
+function retro(db,pid){
+  const leaf=db.tasks.filter(t=>t.projectId===pid&&!hasChildren(db,t)),sc=schedule(db,pid);
+  const done=leaf.filter(t=>t.status==='done'),timed=leaf.filter(t=>t.spentMin>0&&t.durationMin>0);
+  const plannedMin=leaf.reduce((a,t)=>a+(t.durationMin||0),0);
+  const timedPlan=timed.reduce((a,t)=>a+t.durationMin,0),timedReal=timed.reduce((a,t)=>a+t.spentMin,0);
+  const da=done.map(t=>t.doneAt).filter(Boolean);
+  const realFinish=da.length?Math.max(...da):null,allDone=leaf.length>0&&done.length===leaf.length;
+  const dev=timed.map(t=>({t,plan:t.durationMin,real:t.spentMin,ratio:t.spentMin/t.durationMin})).sort((a,b)=>Math.abs(b.real-b.plan)-Math.abs(a.real-a.plan));
+  const units=timed.filter(t=>t.qty>1).map(t=>({t,plan:t.durationMin/t.qty,real:t.spentMin/t.qty}));
+  const late=leaf.filter(t=>t.due&&t.doneAt&&t.doneAt>t.due);
+  return {total:leaf.length,done:done.length,allDone,plannedMin,timed:timed.length,timedPlan,timedReal,realFinish,plannedFinish:sc.count?sc.finish:null,
+    delayDays:(allDone&&realFinish&&sc.count)?Math.round((realFinish-sc.finish)/DAY):null,dev,units,late,cost:projectCosts(db,pid),
+    bias:timedPlan?(timedReal/timedPlan-1):null};
+}
 const qmult=t=>(t&&t.perUnit&&t.qty>1)?t.qty:1;
 function assignQty(db,pid,a,t){
   const p=db.projects.find(x=>x.id===pid),r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return null;
@@ -640,7 +654,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {retro,lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -751,7 +765,7 @@ function viewHoy(){
   }
   if(t.projectId&&projOf(t.projectId)){
     const pr=Core.projectProgress(db,t.projectId),p=projOf(t.projectId);
-    h+=`<div style="padding:4px 4px 0"><div class="rw small mut" style="justify-content:space-between"><span>${esc(p.name)}</span><span>${pr.pct} % · faltan ${esc(fmtDur(pr.remainingMin))}</span></div><div class="bar" style="margin-top:6px"><i style="width:${pr.pct}%"></i></div></div>`;
+    h+=`<div style="padding:4px 4px 0"><div class="rw small mut" style="justify-content:space-between"><span>${esc(p.name)}</span><span>${pr.pct} % · ${pr.remainingMin>0?'faltan '+esc(fmtDur(pr.remainingMin)):'terminado'}</span></div><div class="bar" style="margin-top:6px"><i style="width:${pr.pct}%"></i></div></div>`;
   }
   if(n)h+=`<p class="mut small" style="text-align:center;margin-top:14px">Hoy ya cerraste ${n} ${n===1?'cosa':'cosas'}.</p>`;
   return h;
@@ -800,12 +814,54 @@ function treeRows(pid,parentId,depth,sc){
   });
   return h;
 }
+function retroText(pid){
+  const p=projOf(pid),r=Core.retro(db,pid),rt=p.retro||{};let t=`Informe: ${p.name}\n`;
+  t+=`Tareas hechas: ${r.done} de ${r.total}\nPlan: ${fmtDur(r.plannedMin)}`+(r.timed?` · Tiempo real registrado: ${fmtDur(r.timedReal)} (plan de esas tareas: ${fmtDur(r.timedPlan)})`:'')+'\n';
+  if(r.delayDays!=null)t+=r.delayDays>0?`Terminó ${r.delayDays} día(s) después de lo previsto.\n`:r.delayDays<0?`Terminó ${-r.delayDays} día(s) antes de lo previsto.\n`:'Terminó en la fecha prevista.\n';
+  r.units.forEach(u=>{t+=`- ${u.t.name}: plan ${fmtDur(Math.round(u.plan))} por unidad, real ${fmtDur(Math.round(u.real))}\n`;});
+  if(rt.bien)t+=`\nQué salió bien: ${rt.bien}\n`;if(rt.mejorar)t+=`Qué mejoraría: ${rt.mejorar}\n`;if(rt.prox)t+=`Para la próxima: ${rt.prox}\n`;
+  return t;
+}
+function viewInforme(pid){
+  const p=projOf(pid),r=Core.retro(db,pid),rt=p.retro||{},cur=p.currency,m=v=>esc(Core.money(v,cur));
+  if(!r.total)return emptyView('Todavía no hay tareas para armar el informe.');
+  const pctTxt=x=>(x>=0?'+':'')+Math.round(x*100)+' %';
+  let h='';
+  h+=`<div class="card" style="gap:6px"><div class="lab">${r.allDone?'Proyecto terminado':'Avance hasta ahora'}</div><div class="big-t">${r.done} de ${r.total} tareas</div>
+  <div class="mut small">Tiempo planeado: ${esc(fmtDur(r.plannedMin))}${r.timed?` · tiempo real cronometrado: ${esc(fmtDur(r.timedReal))} (en ${r.timed} tarea${r.timed>1?'s':''})`:''}</div>
+  ${r.delayDays!=null?`<div class="small">${r.delayDays>0?`Terminó <b>${r.delayDays} día${r.delayDays>1?'s':''} después</b> de lo previsto.`:r.delayDays<0?`Terminó <b>${-r.delayDays} día${r.delayDays<-1?'s':''} antes</b> de lo previsto.`:'Terminó en la fecha prevista.'}</div>`:''}</div>`;
+  h+=`<div class="sec">Qué aprendí de mis estimaciones</div>`;
+  if(!r.timed)h+=`<div class="why">Todavía no hay tiempos reales. Cuando hagas una tarea con el cronómetro de «Hoy», acá vas a ver cuánto tardaste de verdad contra lo que estimaste, y la app te va a decir si tendés a estimar corto o largo.</div>`;
+  else{
+    const b=r.bias;
+    h+=`<div class="why">${Math.abs(b)<0.1?'Tus estimaciones estuvieron muy cerca de la realidad.':b>0?`En promedio <b>tardaste ${Math.round(b*100)} % más</b> de lo que estimaste. La próxima, sumale un margen a tus estimaciones.`:`En promedio <b>tardaste ${Math.round(-b*100)} % menos</b> de lo que estimaste. Podés ajustar tus estimaciones a la baja.`}</div>`;
+    r.dev.slice(0,8).forEach(x=>{h+=`<button class="item" style="width:100%;text-align:left;cursor:pointer;padding-left:12px" data-act="edit" data-id="${x.t.id}"><span class="tx" style="flex:1"><div class="nm">${esc(x.t.name)}</div><div class="mut small">Plan ${esc(fmtDur(x.plan))} · real ${esc(fmtDur(x.real))} (${pctTxt(x.ratio-1)})</div></span></button>`;});
+  }
+  if(r.units.length){
+    h+=`<div class="sec">Tiempo real por unidad (para el próximo lote)</div>`;
+    r.units.forEach(u=>{h+=`<div class="item" style="padding-left:12px"><span class="tx" style="flex:1"><div class="nm">${esc(u.t.name)}</div><div class="mut small">Plan ${esc(fmtDur(Math.round(u.plan)))} por unidad · real <b>${esc(fmtDur(Math.round(u.real)))}</b> por unidad</div></span></div>`;});
+  }
+  if(r.cost.plan){
+    h+=`<div class="sec">Costos</div><div class="card" style="gap:4px"><div class="small">Estimado: <b>${m(r.cost.plan)}</b></div><div class="small">Gastado (tareas hechas): <b>${m(r.cost.spent)}</b></div></div>`;
+  }
+  if(r.late.length){
+    h+=`<div class="sec">Terminadas después de su fecha límite</div>`;
+    r.late.forEach(t=>{h+=`<div class="item" style="padding-left:12px"><span class="tx" style="flex:1"><div class="nm">${esc(t.name)}</div><div class="mut small">${esc(dueLabel(t.due))} · hecha ${esc(fmtDate(t.doneAt))}</div></span></div>`;});
+  }
+  h+=`<div class="sec">Mis notas del proyecto</div>
+  <label class="fld">¿Qué salió bien?<textarea id="rt-bien" rows="3">${esc(rt.bien||'')}</textarea></label>
+  <label class="fld">¿Qué mejoraría?<textarea id="rt-mejorar" rows="3">${esc(rt.mejorar||'')}</textarea></label>
+  <label class="fld">Para la próxima vez<textarea id="rt-prox" rows="3">${esc(rt.prox||'')}</textarea></label>
+  <div class="rw"><button class="btn pri" data-act="saveretro" data-id="${pid}">Guardar notas</button><button class="btn" data-act="copyretro" data-id="${pid}">Copiar informe</button></div>`;
+  return h;
+}
 function viewProyecto(pid){
   const p=projOf(pid),pr=Core.projectProgress(db,pid),sc=Core.schedule(db,pid);
   let h=`<div class="hdr"><button class="back" data-act="backproj" aria-label="Volver a proyectos">${svg('back',24,2.2)}</button><h1>${esc(p.name)}</h1></div>
-  <div class="mut small" style="padding:0 0 8px">${pr.pct} % · faltan ${esc(fmtDur(pr.remainingMin))}${sc.count?' · termina '+esc(fmtDate(sc.finish,sc.fine)):''}${p.currency&&p.currency!==db.meta.currency?' · '+esc(p.currency):''}</div>
+  <div class="mut small" style="padding:0 0 8px">${pr.pct} % · ${pr.remainingMin>0?'faltan '+esc(fmtDur(pr.remainingMin)):'terminado'}${sc.count&&pr.remainingMin>0?' · termina '+esc(fmtDate(sc.finish,sc.fine)):''}${p.currency&&p.currency!==db.meta.currency?' · '+esc(p.currency):''}</div>
   <div class="bar" style="margin-bottom:12px"><i style="width:${pr.pct}%"></i></div>
-  <div class="chips">${[['lista','Lista'],['gantt','Gantt'],['pert','PERT'],['cal','Calendario'],['rec','Recursos'],['cost','Costos'],['listas','Listas']].map(v=>`<button class="chip ${S.view===v[0]?'on':''}" data-act="view" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>
+  ${pr.total>0&&pr.pct>=100&&S.view!=='informe'?`<div class="card" style="gap:8px;margin-bottom:10px"><b>¡Proyecto terminado!</b><span class="mut small">Mirá qué aprendiste: tiempos, costos y notas.</span><button class="btn pri sm" data-act="view" data-v="informe">Ver informe</button></div>`:''}
+  <div class="chips">${[['lista','Lista'],['gantt','Gantt'],['pert','PERT'],['cal','Calendario'],['rec','Recursos'],['cost','Costos'],['listas','Listas'],['informe','Informe']].map(v=>`<button class="chip ${S.view===v[0]?'on':''}" data-act="view" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>
   <div class="rw" style="margin-bottom:10px"><button class="btn sm" data-act="addtask">+ Tarea</button><button class="btn sm" data-act="addphase">+ Fase</button><button class="btn sm" data-act="share" data-id="${pid}">Compartir</button><button class="btn sm" data-act="projset" data-id="${pid}">Ajustes</button></div>`;
   if(sc.cyclic)h+='<div class="warn" style="margin-bottom:8px">Hay dependencias circulares: revisá las predecesoras.</div>';
   const loose=Core.looseEnds(db,pid);
@@ -816,6 +872,7 @@ function viewProyecto(pid){
   if(S.view==='rec')return h+viewRecursos(pid);
   if(S.view==='cost')return h+viewCostos(pid);
   if(S.view==='listas')return h+viewListas(pid);
+  if(S.view==='informe')return h+viewInforme(pid);
   const rows=treeRows(pid,null,0,sc);
   h+=rows||'<div class="empty"><p class="mut" style="margin:0">Este proyecto no tiene tareas. Agregá la primera con «+ Tarea».</p></div>';
   return h;
@@ -1675,6 +1732,8 @@ function act(a,d,el){
     case 'backproj':S.pv=null;S.pid=null;S.view='lista';S.listId=null;render();break;
     case 'view':S.view=d.v;S.link={on:false,from:null};render();break;
     case 'pzoom':{const vp=$('#pertvp');if(d.k==='fit')pertFit();else if(d.k==='reset')pertReset();else if(vp){const r=vp.getBoundingClientRect();pertZoomAt(r.left+r.width/2,r.top+r.height/2,d.k==='in'?1.3:1/1.3);}break;}
+    case 'saveretro':{const p=projOf(d.id),L=$('#app');p.retro={bien:L.querySelector('#rt-bien').value.trim(),mejorar:L.querySelector('#rt-mejorar').value.trim(),prox:L.querySelector('#rt-prox').value.trim()};save();toast('Notas guardadas.');break;}
+    case 'copyretro':{const p=projOf(d.id),L=$('#app');if(L.querySelector('#rt-bien'))p.retro={bien:L.querySelector('#rt-bien').value.trim(),mejorar:L.querySelector('#rt-mejorar').value.trim(),prox:L.querySelector('#rt-prox').value.trim()};save();const tx=retroText(d.id);try{navigator.clipboard.writeText(tx).then(()=>toast('Informe copiado.'),()=>toast('No pude copiar.'));}catch(e){toast('No pude copiar.');}break;}
     case 'plinktoggle':S.link={on:!S.link.on,from:null};render();break;
     case 'plink':{
       const id=d.id;
