@@ -699,6 +699,12 @@ function gTasks(items,list){
   });
   return out;
 }
+function estBias(db){
+  const tt=db.tasks.filter(t=>t.status==='done'&&t.spentMin>0&&t.durationMin>0&&!(t.qty>1));
+  if(tt.length<3)return null;
+  const p=tt.reduce((a,t)=>a+t.durationMin,0),r=tt.reduce((a,t)=>a+t.spentMin,0);
+  return {n:tt.length,ratio:Math.max(.5,Math.min(3,r/p))};
+}
 const qmult=t=>(t&&t.perUnit&&t.qty>1)?t.qty:1;
 function assignQty(db,pid,a,t){
   const p=db.projects.find(x=>x.id===pid),r=p&&(p.resources||[]).find(x=>x.id===a.rid);if(!r)return null;
@@ -751,7 +757,7 @@ function removeResource(db,pid,rid){
 }
 const money=(v,cur)=>{try{return new Intl.NumberFormat('es-AR',{style:'currency',currency:cur||'ARS',maximumFractionDigits:v%1?2:0}).format(v);}catch(e){return (cur||'')+' '+Math.round(v);}};
 
-return {gEvents,gTasks,parseICS,retro,lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
+return {estBias,gEvents,gTasks,parseICS,retro,lotMult,applyLot,WIZ_KINDS,wizRows,wizStepsRows,anchorFinish,wizBuild,ecoEventos,ecoCiclo,ecoDuracionMin,ecoBloques,ecoAplicarBloques,anchorProject,ECO_DISC,LIST_TEMPLATES,newList,listProgress,ahpPairs,ahpMatrix,ahpPriority,ahpWorst,ahpSolve,ahpSteps,ahpGet,ahpSet,ahpMatrixDone,ahpMatrixCR,availOf,dateKey,dayWindow,blocksOn,freeMin,capOf,capacityMin,meTasks,meItems,loadByDay,suggestDay,blockConflicts,hm,UNITS,STD_EXTRA,ulab,unitsLike,toResUnit,convert,newResource,resKind,assignQty,taskCost,projectCosts,stockInfo,overlaps,removeResource,money,uid,newDB,parseISODur,hasChildren,kids,leafDesc,dependents,schedule,looseEnds,rank,pickOthers,progressOf,projectProgress,complete,reopen,deleteTask,splitTask,sinVerbo,isQuick,TEMPLATES,defaultStart,makeProject,parseMSProject,buildImport,cleanName};
 })();
 </script>
 
@@ -936,12 +942,21 @@ function agendaDay(d0){
   }).join('');
 }
 function hoyTabs(){return `<div class="chips" style="margin-bottom:8px">${[['foco','Prioridades'],['agenda','Agenda']].map(v=>`<button class="chip ${S.hoyMode===v[0]?'on':''}" data-act="hoymode" data-v="${v[0]}">${v[1]}</button>`).join('')}</div>`;}
+function nextEv(now){
+  const ag=db.meta.agenda;if(!ag||!ag.events)return null;let best=null;
+  ag.events.forEach(e=>{if(e.allDay||e.task||e.start<=now||e.start-now>24*36e5)return;if(!best||e.start<best.start)best=e;});
+  return best;
+}
+function nextEvText(e,now){const m=Math.max(1,Math.round((e.start-now)/60000));return 'Faltan '+fmtDur(m)+' para «'+e.title+'» ('+hhmm(e.start)+')';}
+{const _ni=setInterval(()=>{const el=$('#nextev');if(!el)return;const now=Date.now(),e=nextEv(now);if(e)el.textContent=nextEvText(e,now);},30000);if(_ni&&_ni.unref)_ni.unref();}
 function agendaStrip(){
   const ag=db.meta.agenda;if(!ag||!ag.events||!ag.events.length)return '';
   const d0=new Date();d0.setHours(0,0,0,0);const now=Date.now();
   const it=agendaItems(d0.getTime()).filter(x=>x.k==='ev'&&(x.allDay||x.e>=now||x.s>=now)).slice(0,3);
-  if(!it.length)return '';
-  return `<div class="card" style="gap:6px;margin-bottom:10px"><div class="lab">En tu agenda hoy</div>${it.map(x=>`<div class="small"><b>${x.allDay?'Todo el día':hhmm(x.s)}</b> · ${esc(x.title)}${x.loc?' · '+esc(x.loc):''}</div>`).join('')}<button class="btn sm" data-act="hoymode" data-v="agenda">Ver agenda</button></div>`;
+  const ne=nextEv(Date.now());
+  if(ne){for(let i=it.length-1;i>=0;i--)if(it[i].s===ne.start&&it[i].title===ne.title)it.splice(i,1);}
+  if(!it.length&&!ne)return '';
+  return `<div class="card" style="gap:6px;margin-bottom:10px"><div class="lab">En tu agenda</div>${ne?`<div class="big-t" id="nextev" style="font-size:19px">${esc(nextEvText(ne,Date.now()))}</div>`:''}${it.map(x=>`<div class="small"><b>${x.allDay?'Todo el día':hhmm(x.s)}</b> · ${esc(x.title)}${x.loc?' · '+esc(x.loc):''}</div>`).join('')}<button class="btn sm" data-act="hoymode" data-v="agenda">Ver agenda</button></div>`;
 }
 function viewAgenda(){
   const ag=db.meta.agenda,t0=new Date();t0.setHours(0,0,0,0);
@@ -961,6 +976,13 @@ function viewAgenda(){
   else h+=`<div class="mut small" style="margin-top:10px">Agenda cargada el ${esc(fmtDate(ag.importedAt))} · ${ag.events.length} eventos.<div class="rw" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button class="btn sm" data-act="gsetup">Conectar con Google</button><button class="btn sm" data-act="importics">Actualizar</button><button class="btn sm dng" data-act="rmics">Quitar</button></div></div>`;
   return h;
 }
+function hoyHints(t,fm){
+  let h='';const now=Date.now(),ne=nextEv(now);
+  if(ne){const m=Math.round((ne.start-now)/60000);if(m>0&&m<fm)h+=`<div class="warn small">En ${m} min tenés «${esc(ne.title)}». Un bloque de ${fm} min no entra: empezá igual con menos, o elegí una tarea más corta.</div>`;}
+  const eb=Core.estBias(db);
+  if(eb&&t.durationMin&&!(t.qty>1)&&Math.abs(eb.ratio-1)>=.15){const adj=Math.round(t.durationMin*eb.ratio);h+=`<div class="mut small">Estimaste ${esc(fmtDur(t.durationMin))}. Según tus últimas ${eb.n} tareas medidas, suelen salirte en unos <b>${esc(fmtDur(adj))}</b>.</div>`;}
+  return h;
+}
 function viewHoyFoco(){
   const fecha=new Date().toLocaleDateString('es-AR',{weekday:'long',day:'numeric',month:'long'});
   const r=Core.rank(db,Date.now());
@@ -976,7 +998,7 @@ function viewHoyFoco(){
   const t=main.task,fm=focusMin(t);
   h+=`<section class="card" aria-label="Tarea principal"><div class="lab">${main.doing?'En curso':'Ahora'}</div>
   <div><div class="big-t">${esc(t.name)}</div><div class="mut" style="margin-top:4px">${subLine(t)}</div></div>
-  <div class="why">${esc(whyText(main))}</div>
+  <div class="why">${esc(whyText(main))}</div>${hoyHints(t,fm)}
   <button class="btn pri blk" data-act="start" data-id="${t.id}">${svg('play',20,0)}<span>Empezar · ${fm} min</span></button>
   <div class="rw"><button class="btn" data-act="other" ${r.length>1?'':'disabled'}>Otra tarea</button><button class="btn" data-act="splitopen" data-id="${t.id}">Partir en pasos</button></div></section>`;
   if(others.length){
@@ -1741,25 +1763,49 @@ function drawLayer(){
   const L=$('#layer');let h='';
   if(S.sheet)h+=sheetHTML();
   if(db.meta.timer)h+=timerHTML();
+  if(db.meta.brk)h+=brkHTML();
   if(S.celebrate)h+=celebrateHTML();
   L.innerHTML=h;
   clearInterval(tmrI);
-  if(db.meta.timer){tmrI=setInterval(tickTimer,500);tickTimer();}
+  if(db.meta.timer||db.meta.brk){tmrI=setInterval(tickTimer,500);tickTimer();}
   const f=L.querySelector('[data-focus]');if(f&&S.sheet&&!S.sheet._focused){S.sheet._focused=true;f.focus();}
 }
 function timerLeft(){const tm=db.meta.timer;const el=tm.acc+(tm.since?Date.now()-tm.since:0);return {el,left:tm.total-el};}
 function timerHTML(){
   const tm=db.meta.timer,t=taskOf(tm.taskId);
-  return `<div class="full" role="dialog" aria-modal="true" aria-label="Temporizador"><div><div class="mut">Enfocate en</div><div class="big-t">${esc(t?t.name:'')}</div><div class="dig" id="tdig">--:--</div><div class="bar" style="width:100%"><i id="tbar" style="width:0%"></i></div><div class="mut small" id="tnote">&nbsp;</div>
+  return `<div class="full" role="dialog" aria-modal="true" aria-label="Temporizador"><div><div class="mut">Enfocate en</div><div class="big-t">${esc(t?t.name:'')}</div><div class="dig" id="tdig">--:--</div><div class="bar" style="width:100%;height:14px"><i id="tbar" style="width:0%"></i></div><div class="mut" id="tclock" style="font-variant-numeric:tabular-nums">&nbsp;</div><div class="mut small" id="tnote">&nbsp;</div>
+  <div class="rw" id="tend" style="width:100%;display:none"><button class="btn pri" data-act="tbreak">Descansar un rato</button><button class="btn" data-act="tmore">10 min más</button></div>
   <div class="rw" style="width:100%"><button class="btn" id="tpause" data-act="tpause">${tm.since?'Pausar':'Seguir'}</button><button class="btn pri" style="font-size:16px" data-act="tdone">Terminé</button></div><button class="btn sm" style="border:none" data-act="texit">Salir sin terminar</button></div></div>`;
 }
+const BRK_TIPS=['Tomá un vaso de agua.','Despegá la vista de la pantalla y mirá lejos.','Pará, caminá un poco.','Estirá la espalda y los hombros.','Respirá hondo tres veces.'];
+function brkHTML(){
+  const b=db.meta.brk,t=taskOf(b.taskId),tip=BRK_TIPS[(b.until/60000|0)%BRK_TIPS.length];
+  return `<div class="full" role="dialog" aria-modal="true" aria-label="Pausa"><div><div class="mut">Pausa de ${b.mins} min</div><div class="dig" id="bdig">--:--</div><div class="bar" style="width:100%;height:14px"><i id="bbar" style="width:0%"></i></div><div class="big-t" style="font-size:22px">${esc(tip)}</div><div class="mut small" id="bnote">Descansar también es parte del trabajo.</div>
+  <button class="btn pri blk" data-act="bkback">Volver a: ${esc(t?(t.name.length>30?t.name.slice(0,29)+'…':t.name):'la tarea')}</button><button class="btn blk" data-act="bkend">Listo por hoy</button></div></div>`;
+}
+function alertNow(){
+  try{if(navigator.vibrate)navigator.vibrate([300,150,300,150,300]);}catch(e){}
+  try{const AC=window.AudioContext||window.webkitAudioContext;if(AC){const c=new AC(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.value=.15;o.start();o.stop(c.currentTime+.35);}}catch(e){}
+}
 function tickTimer(){
+  const now=Date.now(),br=db.meta.brk;
+  if(br){
+    const left=br.until-now,bd=$('#bdig'),bb=$('#bbar'),bn=$('#bnote');if(!bd)return;
+    const a=Math.max(0,left),m=Math.floor(a/60000),sc=Math.floor(a/1000)%60;
+    bd.textContent=String(m).padStart(2,'0')+':'+String(sc).padStart(2,'0');
+    bb.style.width=Math.min(100,(1-a/(br.mins*60000))*100)+'%';
+    if(left<=0){bn.textContent='Terminó la pausa. Cuando quieras, volvemos.';if(!br.alerted){br.alerted=true;alertNow();save();}}
+    return;
+  }
   if(!db.meta.timer)return;
   const {el,left}=timerLeft(),tm=db.meta.timer,d=$('#tdig'),b=$('#tbar'),n=$('#tnote');if(!d)return;
   const a=Math.abs(left),m=Math.floor(a/60000),s=Math.floor(a/1000)%60;
   d.textContent=(left<0?'+':'')+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
   b.style.width=Math.min(100,el/tm.total*100)+'%';
-  n.textContent=left<0?'Pasó el tiempo del bloque. ¿Seguís o cerrás por hoy?':(tm.since?'':'En pausa');
+  const ck=$('#tclock');if(ck)ck.textContent=tm.since?'Ahora '+hhmm(now)+' · termina a las '+hhmm(now+Math.max(0,left)):'En pausa';
+  const en=$('#tend');if(en)en.style.display=left<=0?'flex':'none';
+  if(left<=0&&!tm.alerted){tm.alerted=true;alertNow();save();}
+  n.textContent=left<0?'Terminó el bloque. Un descanso ahora te ayuda a seguir mejor.':'';
 }
 function celebrateHTML(){
   const c=S.celebrate,nx=c.next;
@@ -1869,10 +1915,11 @@ function addInbox(name,pid){
 }
 function startTimer(id){
   const t=taskOf(id);if(!t)return;
-  if(!db.meta.timer||db.meta.timer.taskId!==id)db.meta.timer={taskId:id,total:focusMin(t)*60000,acc:0,since:Date.now()};
+  db.meta.brk=null;if(!db.meta.timer||db.meta.timer.taskId!==id)db.meta.timer={taskId:id,total:focusMin(t)*60000,acc:0,since:Date.now()};
   t.status='doing';S.sheet=null;S.celebrate=null;save();render();
 }
 function finishTask(id){
+  {const tm0=db.meta.timer,t0=taskOf(id);if(tm0&&tm0.taskId===id&&t0)t0.spentMin=(t0.spentMin||0)+Math.max(1,Math.round(timerLeft().el/60000));}
   Core.complete(db,id,Date.now());
   db.meta.timer=null;
   const t=taskOf(id),r=Core.rank(db,Date.now());
@@ -1950,6 +1997,12 @@ function act(a,d,el){
     case 'startnext':S.celebrate=null;startTimer(d.id);break;
     case 'closecel':S.celebrate=null;render();break;
     case 'tpause':{const tm=db.meta.timer;if(!tm)break;if(tm.since){tm.acc+=Date.now()-tm.since;tm.since=null;}else tm.since=Date.now();save();drawLayer();break;}
+    case 'tmore':{const tm=db.meta.timer;if(tm){tm.total+=10*60000;tm.alerted=false;save();drawLayer();}break;}
+    case 'tbreak':{const tm=db.meta.timer;if(!tm)break;const t=taskOf(tm.taskId);if(t)t.spentMin=(t.spentMin||0)+Math.round(timerLeft().el/60000);
+      const day=new Date().toDateString(),bk=db.meta.blk&&db.meta.blk.day===day?db.meta.blk:{day,n:0};bk.n++;db.meta.blk=bk;
+      const mins=bk.n%4===0?15:5;db.meta.brk={taskId:tm.taskId,until:Date.now()+mins*60000,mins};db.meta.timer=null;save();render();break;}
+    case 'bkback':{const b=db.meta.brk;db.meta.brk=null;if(b&&taskOf(b.taskId))startTimer(b.taskId);else{save();render();}break;}
+    case 'bkend':db.meta.brk=null;save();render();break;
     case 'tdone':finishTask(db.meta.timer.taskId);break;
     case 'texit':{const tm=db.meta.timer;if(tm){const t=taskOf(tm.taskId);const el2=timerLeft().el;if(t)t.spentMin=(t.spentMin||0)+Math.round(el2/60000);}db.meta.timer=null;save();render();break;}
     case 'capture':openCapture();break;
@@ -2225,6 +2278,7 @@ document.addEventListener('change',e=>{
   if(!db)db=Core.newDB();
   normalize();
   if(db.meta.timer&&!taskOf(db.meta.timer.taskId))db.meta.timer=null;
+  if(db.meta.brk&&(!taskOf(db.meta.brk.taskId)||Date.now()-db.meta.brk.until>3600000))db.meta.brk=null;
   render();
   try{if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol))navigator.serviceWorker.register('sw.js').catch(()=>{});}catch(e){}
   try{if(navigator.storage&&navigator.storage.persist){persisted=(await navigator.storage.persisted())||(await navigator.storage.persist());if(S.tab==='mas'&&!S.sheet)render();}}catch(e){}
