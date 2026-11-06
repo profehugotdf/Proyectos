@@ -64,7 +64,8 @@ button{cursor:pointer}
 .sheet{width:100%;max-width:520px;max-height:92dvh;overflow:auto;background:var(--bg);border-radius:22px 22px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px}
 .sheet h2{margin:0;font-size:22px;line-height:28px}
 .fld{display:flex;flex-direction:column;gap:4px;font-size:14px;font-weight:700}
-.fld input,.fld select,.fld textarea{border:1px solid var(--line2);border-radius:10px;background:#fff;min-height:44px;padding:8px 10px;font-weight:400;font-size:16px;width:100%}
+.fld .dpbtn{text-align:left;cursor:pointer}
+.fld input,.fld select,.fld textarea,.fld .dpbtn{border:1px solid var(--line2);border-radius:10px;background:#fff;min-height:44px;padding:8px 10px;font-weight:400;font-size:16px;width:100%}
 .fld textarea{min-height:88px}
 .two{display:flex;gap:8px}.two>*{flex:1}
 .pred{background:#fff;border:1px solid var(--line);border-radius:10px;padding:4px 10px}
@@ -1753,12 +1754,61 @@ function render(){
   const nav=[['hoy','Hoy','hoy'],['proyectos','Proyectos','proy'],['bandeja','Bandeja','band'],['decidir','Decidir','dec'],['mas','Más','mas']];
   $('#app').innerHTML=`<main class="scr">${body}</main><button class="fab" data-act="capture" aria-label="Anotar algo rápido">${svg('plus',26,2.2)}</button><nav class="nav" aria-label="Navegación principal"><div>${nav.map(n=>`<button data-act="tab" data-tab="${n[0]}" ${S.tab===n[0]?'aria-current="page" class="on"':''}>${svg(n[2])}<span>${n[1]}</span></button>`).join('')}</div></nav>`;
   const gs=$('#gsc');if(gs){gs.scrollLeft=gscL;}
+  enhanceDates($('#app'));
   pertBind();
   drawLayer();
 }
 
 /* ---------- capas (hojas, temporizador, cierre) ---------- */
 let tmrI=null;
+
+/* ---------- selector de fecha propio (se adapta a ventanas chicas, p. ej. pantalla dividida) ---------- */
+let DP=null;
+const dpLabel=v=>{if(!v)return 'Elegir fecha';const [y,m,d]=v.split('-').map(Number);return new Date(y,m-1,d).toLocaleDateString('es-AR',{weekday:'short',day:'numeric',month:'short',year:'numeric'});};
+function enhanceDates(root){
+  if(!root)return;
+  root.querySelectorAll('input[type=date]').forEach(inp=>{
+    const b=document.createElement('button');b.type='button';b.className='dpbtn';b.dataset.dpfor=inp.id;b.textContent=dpLabel(inp.value);
+    inp.parentNode.insertBefore(b,inp);inp.type='hidden';
+  });
+}
+function dpRefresh(inp){if(!inp)return;const b=document.querySelector('[data-dpfor="'+inp.id+'"]');if(b)b.textContent=dpLabel(inp.value);}
+function dpOpen(id){
+  const inp=document.getElementById(id);if(!inp)return;
+  const t=new Date(),c=inp.value?inp.value.split('-').map(Number):null;
+  DP={id,y:c?c[0]:t.getFullYear(),m:c?c[1]-1:t.getMonth()};dpDraw();
+}
+function dpClose(){DP=null;const e=document.getElementById('dp');if(e)e.remove();}
+function dpDraw(){
+  if(!DP)return;
+  let el=document.getElementById('dp');if(!el){el=document.createElement('div');el.id='dp';document.body.appendChild(el);}
+  const inp=document.getElementById(DP.id),sel=inp?inp.value:'',short=window.innerHeight<560,cell=short?34:44;
+  const first=new Date(DP.y,DP.m,1),lead=(first.getDay()+6)%7,days=new Date(DP.y,DP.m+1,0).getDate(),now=new Date(),tk=dateVal(now.getTime());
+  const mn=first.toLocaleDateString('es-AR',{month:'long',year:'numeric'}).replace(/^./,c=>c.toUpperCase());
+  let g='';['L','M','M','J','V','S','D'].forEach(x=>{g+=`<div style="text-align:center;font-size:12px;color:var(--mut);font-weight:700">${x}</div>`;});
+  for(let i=0;i<lead;i++)g+='<div></div>';
+  for(let d=1;d<=days;d++){
+    const iso=`${DP.y}-${String(DP.m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`,on=iso===sel,td=iso===tk;
+    g+=`<button type="button" data-dpd="${iso}" style="height:${cell}px;border-radius:10px;border:${td&&!on?'2px solid var(--teal)':'1px solid transparent'};background:${on?'var(--teal)':'transparent'};color:${on?'#fff':'var(--ink)'};font-weight:${on||td?700:400};font-size:16px;padding:0">${d}</button>`;
+  }
+  el.innerHTML=`<div data-dpbg="1" style="position:fixed;inset:0;z-index:90;background:rgba(29,35,39,.5);display:flex;align-items:center;justify-content:center;padding:8px"><div role="dialog" aria-modal="true" aria-label="Elegir fecha" style="width:100%;max-width:340px;max-height:calc(100dvh - 16px);overflow:auto;background:var(--bg);border-radius:18px;padding:12px;display:flex;flex-direction:column;gap:8px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><button type="button" class="btn sm" data-dpnav="-1" aria-label="Mes anterior">‹</button><b>${esc(mn)}</b><button type="button" class="btn sm" data-dpnav="1" aria-label="Mes siguiente">›</button></div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">${g}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="btn sm" data-dpnav="today" style="flex:1">Hoy</button><button type="button" class="btn sm" data-dpnav="clear" style="flex:1">Sin fecha</button><button type="button" class="btn sm" data-dpnav="close" style="flex:1">Cancelar</button></div></div></div>`;
+}
+document.addEventListener('click',e=>{
+  const o=e.target.closest&&e.target.closest('[data-dpfor]');
+  if(o){e.preventDefault();dpOpen(o.dataset.dpfor);return;}
+  if(!DP)return;
+  const dd=e.target.closest('[data-dpd]'),nv=e.target.closest('[data-dpnav]');
+  const pick=v=>{const inp=document.getElementById(DP.id);if(inp){inp.value=v;dpRefresh(inp);inp.dispatchEvent(new Event('input',{bubbles:true}));}dpClose();};
+  if(dd){pick(dd.dataset.dpd);return;}
+  if(nv){const k=nv.dataset.dpnav;
+    if(k==='close')dpClose();else if(k==='clear')pick('');else if(k==='today')pick(dateVal(Date.now()));
+    else{const x=new Date(DP.y,DP.m+(+k),1);DP.y=x.getFullYear();DP.m=x.getMonth();dpDraw();}
+    return;}
+  if(e.target.dataset&&e.target.dataset.dpbg)dpClose();
+},true);
 function drawLayer(){
   const L=$('#layer');let h='';
   if(S.sheet)h+=sheetHTML();
@@ -1768,6 +1818,7 @@ function drawLayer(){
   L.innerHTML=h;
   clearInterval(tmrI);
   if(db.meta.timer||db.meta.brk){tmrI=setInterval(tickTimer,500);tickTimer();}
+  enhanceDates(L);
   const f=L.querySelector('[data-focus]');if(f&&S.sheet&&!S.sheet._focused){S.sheet._focused=true;f.focus();}
 }
 function timerLeft(){const tm=db.meta.timer;const el=tm.acc+(tm.since?Date.now()-tm.since:0);return {el,left:tm.total-el};}
@@ -2085,7 +2136,7 @@ function act(a,d,el){
     case 'wback':wizBack();break;
     case 'ecoopen':S.sheet={type:'eco'};drawLayer();break;
     case 'ecoapply':{const n=Core.ecoAplicarBloques(db,Core.ecoBloques(ecoRead,todayISO()));S.sheet=null;save();render();toast(n?`Traje ${n} bloque${n===1?'':'s'} protegido${n===1?'':'s'}.`:'No había nada para traer.');break;}
-    case 'anevent':{const e=$('#an-date');if(e)e.value=d.d;break;}
+    case 'anevent':{const e=$('#an-date');if(e){e.value=d.d;dpRefresh(e);}break;}
     case 'doanchor':{
       const L=$('#layer'),tid=L.querySelector('#an-task').value,dv=L.querySelector('#an-date').value,tv=L.querySelector('#an-time').value||'08:00';
       const target=parseDT(dv,tv);if(!target){toast('Poné la fecha.');break;}
