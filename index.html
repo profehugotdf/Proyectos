@@ -1767,22 +1767,35 @@ let DP=null;
 const dpLabel=v=>{if(!v)return 'Elegir fecha';const [y,m,d]=v.split('-').map(Number);return new Date(y,m-1,d).toLocaleDateString('es-AR',{weekday:'short',day:'numeric',month:'short',year:'numeric'});};
 function enhanceDates(root){
   if(!root)return;
-  root.querySelectorAll('input[type=date]').forEach(inp=>{
-    const b=document.createElement('button');b.type='button';b.className='dpbtn';b.dataset.dpfor=inp.id;b.textContent=dpLabel(inp.value);
+  root.querySelectorAll('input[type=date],input[type=time]').forEach(inp=>{
+    const k=inp.type==='time'?'t':'d';inp.dataset.dpk=k;
+    const b=document.createElement('button');b.type='button';b.className='dpbtn';b.dataset.dpfor=inp.id;b.textContent=k==='t'?(inp.value||'Elegir hora'):dpLabel(inp.value);
     inp.parentNode.insertBefore(b,inp);inp.type='hidden';
   });
 }
-function dpRefresh(inp){if(!inp)return;const b=document.querySelector('[data-dpfor="'+inp.id+'"]');if(b)b.textContent=dpLabel(inp.value);}
+function dpRefresh(inp){if(!inp)return;const b=document.querySelector('[data-dpfor="'+inp.id+'"]');if(b)b.textContent=inp.dataset.dpk==='t'?(inp.value||'Elegir hora'):dpLabel(inp.value);}
 function dpOpen(id){
   const inp=document.getElementById(id);if(!inp)return;
+  if(inp.dataset.dpk==='t'){DP={id,kind:'t',step:'h'};dpDraw();return;}
   const t=new Date(),c=inp.value?inp.value.split('-').map(Number):null;
-  DP={id,y:c?c[0]:t.getFullYear(),m:c?c[1]-1:t.getMonth()};dpDraw();
+  DP={id,kind:'d',y:c?c[0]:t.getFullYear(),m:c?c[1]-1:t.getMonth()};dpDraw();
 }
 function dpClose(){DP=null;const e=document.getElementById('dp');if(e)e.remove();}
 function dpDraw(){
   if(!DP)return;
   let el=document.getElementById('dp');if(!el){el=document.createElement('div');el.id='dp';document.body.appendChild(el);}
   const inp=document.getElementById(DP.id),sel=inp?inp.value:'',short=window.innerHeight<560,cell=short?34:44;
+  if(DP.kind==='t'){
+    const cur=sel?sel.split(':').map(Number):[null,null];let g='',title;
+    const btn=(att,txt,on)=>`<button type="button" ${att} style="height:${cell}px;border-radius:10px;border:1px solid ${on?'var(--teal)':'var(--line2)'};background:${on?'var(--teal)':'#fff'};color:${on?'#fff':'var(--ink)'};font-weight:${on?700:400};font-size:16px;padding:0">${txt}</button>`;
+    if(DP.step==='h'){title='¿A qué hora?';for(let h=0;h<24;h++)g+=btn('data-dph="'+h+'"',String(h).padStart(2,'0'),cur[0]===h);}
+    else{title='Hora '+String(DP.h).padStart(2,'0')+': ¿y los minutos?';for(let m=0;m<60;m+=5)g+=btn('data-dpm="'+m+'"',':'+String(m).padStart(2,'0'),cur[0]===DP.h&&cur[1]===m);}
+    el.innerHTML=`<div data-dpbg="1" style="position:fixed;inset:0;z-index:90;background:rgba(29,35,39,.5);display:flex;align-items:center;justify-content:center;padding:8px"><div role="dialog" aria-modal="true" aria-label="Elegir hora" style="width:100%;max-width:340px;max-height:calc(100dvh - 16px);overflow:auto;background:var(--bg);border-radius:18px;padding:12px;display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">${DP.step==='m'?'<button type="button" class="btn sm" data-dpnav="back" aria-label="Volver a las horas">‹</button>':'<span></span>'}<b>${esc(title)}</b><span style="width:40px"></span></div>
+      <div style="display:grid;grid-template-columns:repeat(${DP.step==='h'?6:4},1fr);gap:4px">${g}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" class="btn sm" data-dpnav="now" style="flex:1">Ahora</button><button type="button" class="btn sm" data-dpnav="clear" style="flex:1">Sin hora</button><button type="button" class="btn sm" data-dpnav="close" style="flex:1">Cancelar</button></div></div></div>`;
+    return;
+  }
   const first=new Date(DP.y,DP.m,1),lead=(first.getDay()+6)%7,days=new Date(DP.y,DP.m+1,0).getDate(),now=new Date(),tk=dateVal(now.getTime());
   const mn=first.toLocaleDateString('es-AR',{month:'long',year:'numeric'}).replace(/^./,c=>c.toUpperCase());
   let g='';['L','M','M','J','V','S','D'].forEach(x=>{g+=`<div style="text-align:center;font-size:12px;color:var(--mut);font-weight:700">${x}</div>`;});
@@ -1800,11 +1813,15 @@ document.addEventListener('click',e=>{
   const o=e.target.closest&&e.target.closest('[data-dpfor]');
   if(o){e.preventDefault();dpOpen(o.dataset.dpfor);return;}
   if(!DP)return;
-  const dd=e.target.closest('[data-dpd]'),nv=e.target.closest('[data-dpnav]');
+  const dd=e.target.closest('[data-dpd]'),nv=e.target.closest('[data-dpnav]'),dh=e.target.closest('[data-dph]'),dm=e.target.closest('[data-dpm]');
   const pick=v=>{const inp=document.getElementById(DP.id);if(inp){inp.value=v;dpRefresh(inp);inp.dispatchEvent(new Event('input',{bubbles:true}));}dpClose();};
   if(dd){pick(dd.dataset.dpd);return;}
+  if(dh){DP.h=+dh.dataset.dph;DP.step='m';dpDraw();return;}
+  if(dm){pick(String(DP.h).padStart(2,'0')+':'+String(+dm.dataset.dpm).padStart(2,'0'));return;}
   if(nv){const k=nv.dataset.dpnav;
     if(k==='close')dpClose();else if(k==='clear')pick('');else if(k==='today')pick(dateVal(Date.now()));
+    else if(k==='now'){const n=new Date();pick(String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0'));}
+    else if(k==='back'){DP.step='h';dpDraw();}
     else{const x=new Date(DP.y,DP.m+(+k),1);DP.y=x.getFullYear();DP.m=x.getMonth();dpDraw();}
     return;}
   if(e.target.dataset&&e.target.dataset.dpbg)dpClose();
