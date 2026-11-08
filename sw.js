@@ -1,5 +1,5 @@
 /* Service worker de Proyectos: abre sin conexión y se actualiza solo cuando hay red. */
-const V = 'proyectos-v23';
+const V = 'proyectos-v24';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 
 self.addEventListener('install', e => {
