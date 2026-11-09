@@ -260,7 +260,28 @@ guitarra:{label:'Armado de una guitarra',rows:[
 viaje:{label:'Proyectar un viaje',rows:[
 ['Decidir','Elegir destino (decisión)',1440,[]],['Decidir','Definir fechas y duración',1440,[0]],['Decidir','Fijar presupuesto',1440,[1]],
 ['Reservas','Reservar transporte',1440,[2]],['Reservas','Reservar alojamiento',1440,[2]],['Documentación','Revisar documentos, seguros y vacunas',2880,[1]],
-['Preparar','Armar itinerario',1440,[3,4]],['Preparar','Armar equipaje',1440,[5,6]],['Preparar','Último chequeo y cambio de moneda',480,[7]]]}
+['Preparar','Armar itinerario',1440,[3,4]],['Preparar','Armar equipaje',1440,[5,6]],['Preparar','Último chequeo y cambio de moneda',480,[7]]]},
+sensorcad:{label:'Sensor de cadencia para el kayak ergómetro',lists:['sensor_cadencia'],rows:[
+['Definir','Decidir qué medir: vueltas del volante, paladas en la polea, o las dos',30,[],'Volante: velocidad (RPM). Polea o pértiga: paladas. Se puede empezar solo con el volante y sumar lo otro después.'],
+['Definir','Medir el volante: RPM máxima esperada, dónde va el imán y dónde el sensor',45,[0]],
+['Definir','Decidir el formato Bluetooth y cuántos imanes poner',45,[0],'Perfil estándar de velocidad y cadencia (CSC) para que Kayak Indoor lo lea como al Cyclami. Más de un imán por vuelta da más resolución para ver el tirón y la recuperación, pero el perfil CSC cuenta una vuelta por pulso: habría que dividir en el firmware o usar un servicio propio. Revisar qué campo lee hoy Kayak Indoor.'],
+['Compras','Armar la lista de compras (está en Listas)',20,[1,2]],
+['Compras','Comprar ESP32, sensor Hall e imanes',90,[3]],
+['Compras','Esperar que lleguen',7200,[4]],
+['Banco de pruebas','Probar el sensor con el ESP32 sobre la mesa (imán en la mano, ver los pulsos)',60,[5],'Ojo: muchos sensores Hall, como el A3144, piden 4,5 V o más para funcionar. Alimentarlo con el pin de 5 V del ESP32 y poner el pull-up a 3,3 V para que la señal no pase de 3,3 V. Revisar la hoja de datos del que se compre.'],
+['Banco de pruebas','Firmware v1: contar pulsos por interrupción, antirrebote y calcular RPM',120,[6]],
+['Banco de pruebas','Firmware v2: servidor Bluetooth con perfil de velocidad y cadencia',150,[7],'Servicio 0x1816, característica de medición 0x2A5B (revoluciones acumuladas y hora del último evento).'],
+['Banco de pruebas','Mirar las notificaciones con nRF Connect',45,[8]],
+['Banco de pruebas','Conectarlo desde Kayak Indoor y ver el RPM en vivo',60,[9]],
+['Montaje','Hacer el soporte del sensor y pegar el imán en el volante',120,[10],'El imán agrega peso en un punto del volante. Usar imanes chicos y, si hace falta, contrapesar del lado opuesto.'],
+['Montaje','Caja del ESP32, alimentación y fijación',90,[10]],
+['Montaje','Ajustar la separación imán-sensor y probar a baja y alta velocidad',60,[11,12]],
+['Montaje','Remada de prueba de 5 min: comparar con el Cyclami y con la cámara',60,[13]],
+['Integración','Revisar la frecuencia de notificación: que se vea el tirón y la recuperación, no solo una por segundo',120,[14]],
+['Integración','Recalibrar la tabla RPM a velocidad con el sensor nuevo',120,[14]],
+['Integración','Opcional: segundo sensor en la polea para contar paladas',180,[15]],
+['Integración','Sesión real de 20 min y revisar el resultado',60,[15,16]],
+['Integración','Documentar el cableado y subir el firmware al repositorio',45,[18,17]]]}
 };
 function defaultStart(now){const d=new Date(now||Date.now());d.setHours(9,0,0,0);return d.getTime();}
 function makeProject(db,key,name,start,now,rowsOver){
@@ -274,10 +295,11 @@ function makeProject(db,key,name,start,now,rowsOver){
       if(!groups[r[0]]){const g={id:uid(),projectId:p.id,parentId:null,name:r[0],durationMin:null,status:'todo',percent:0,preds:[],starred:false,resp:'',notes:'',due:null,createdAt:now+i};groups[r[0]]=g;db.tasks.push(g);}
       parent=groups[r[0]].id;
     }
-    const t={id:uid(),projectId:p.id,parentId:parent,name:r[1],durationMin:r[2],status:'todo',percent:0,preds:[],starred:false,resp:'',notes:'',due:null,createdAt:now+i};
+    const t={id:uid(),projectId:p.id,parentId:parent,name:r[1],durationMin:r[2],status:'todo',percent:0,preds:[],starred:false,resp:'',notes:r[4]||'',due:null,createdAt:now+i};
     ids.push(t.id);db.tasks.push(t);
   });
   rows.forEach((r,i)=>{const t=db.tasks.find(x=>x.id===ids[i]);t.preds=r[3].map(j=>({id:ids[j],type:'FS',lag:0}));});
+  const tp=!rowsOver&&TEMPLATES[key];if(tp&&tp.lists)tp.lists.forEach(k=>newList(db,((LIST_TEMPLATES[k]||{}).label||'Lista')+': '+p.name,p.id,k,now));
   return p;
 }
 function parseMSProject(text,DP){
@@ -449,6 +471,7 @@ const LIST_TEMPLATES={
   vacia:{label:'Vacía',items:[]},
   viaje:{label:'Viaje',items:['Documentos y pasajes','Reservas (guardadas en el teléfono)','Tarjetas y algo de efectivo','Cargador y cable','Batería externa','Medicamentos','Ropa de abrigo','Calzado cómodo','Neceser','Avisar y dejar la casa lista']},
   evento:{label:'Evento o carrera',items:['Inscripciones confirmadas','Listado de participantes','Dorsales y alfileres','Cronometraje probado','Vallas y cintas de señalización','Botiquín y ambulancia avisada','Agua e hidratación','Premios','Megáfono y parlantes','Permisos y avisos','Voluntarios confirmados']},
+  sensor_cadencia:{label:'Compras del sensor de cadencia',items:['ESP32 con Bluetooth (si no usás el de la cinta)','Sensor Hall: revisar el voltaje mínimo (el A3144 pide 4,5 V) o uno que ande con 3,3 V','Imanes de neodimio chicos (2 o 3, por si hay que probar posiciones)','Resistencia de 10 kΩ para el pull-up (si el módulo no la trae)','Cables Dupont y un poco de cable fino','Protoboard para las pruebas','Caja o carcasa para el ESP32','Cable USB y power bank o cargador de 5 V','Epoxi o cinta doble faz fuerte para fijar sensor e imán','Termocontraíble o cinta aisladora']},
   ironman_semana:{label:'Ironman: semana de carrera',items:['DNI y documentos','Confirmación de inscripción','Kit retirado (dorsal, chip, gorro, pulsera)','Charla técnica hecha','Bici revisada (neumáticos, frenos, cambios, baterías)','Bidones y portabidones','Herramientas y cámara de repuesto','Nutrición de carrera (geles, sales, barras) contada','Ropa para todos los climas','Cena y desayuno probados','Dormir temprano los dos días anteriores','Mapa del circuito y horarios']},
   ironman_natacion:{label:'Ironman: largada (natación)',items:['Neoprene y traje de triatlón','Antiparras (dos)','Gorro oficial','Chip de cronometraje','Anti-roces','Ropa de abrigo para esperar','Desayuno probado','Bolsa de ropa para después']},
   ironman_t1:{label:'Ironman: bolsa T1 (a la bici)',items:['Casco','Zapatillas de bici','Medias','Anteojos','Cinto con número','Geles y sales','Bidones llenos','Protector solar','Toalla chica','Campera liviana por si llueve']},
@@ -2353,6 +2376,15 @@ document.addEventListener('change',e=>{
   if(!db){try{const l=localStorage.getItem('proyectos_db');if(l)db=JSON.parse(l);}catch(e){}}
   if(!db)db=Core.newDB();
   normalize();
+  try{
+    const hm=/[#&]plantilla=([a-z0-9_]+)/i.exec(location.hash||'');
+    if(hm&&hm[1]!=='vacio'&&Core.TEMPLATES[hm[1]]){
+      let pj=db.projects.find(x=>x.tplKey===hm[1]);
+      if(!pj){pj=Core.makeProject(db,hm[1],null,null,Date.now());pj.tplKey=hm[1];save();}
+      S.tab='proyectos';S.pid=pj.id;S.view='lista';
+      history.replaceState(null,'',location.pathname+location.search);
+    }
+  }catch(e){}
   if(db.meta.timer&&!taskOf(db.meta.timer.taskId))db.meta.timer=null;
   if(db.meta.brk&&(!taskOf(db.meta.brk.taskId)||Date.now()-db.meta.brk.until>3600000))db.meta.brk=null;
   render();
